@@ -48,6 +48,7 @@ export function dialectFromDefinition(def: NativeProviderDefinition): AnyDialect
     ...(def.usage
       ? { accountUsage: (...[profile, options]: Parameters<NonNullable<Dialect['accountUsage']>>) => def.usage!.probe(profile, options) }
       : {}),
+    ...(def.runtimeProfiles ? { runtimeProfiles: def.runtimeProfiles } : {}),
     ...(def.models ? { discoverModels: (profile: Parameters<NonNullable<Dialect['discoverModels']>>[0]) => def.models!.discover(profile) } : {}),
     ...(spans ? { spans } : {}),
     ...(def.lifecycle?.dispose ? { dispose: def.lifecycle.dispose } : {}),

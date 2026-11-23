@@ -69,6 +69,14 @@ export function dialectProblems(dialect: unknown): string[] {
     }
   }
 
+  if (d.runtimeProfiles !== undefined) {
+    const homes = d.runtimeProfiles as Loose | null;
+    if (homes === null || typeof homes !== 'object' || typeof homes.label !== 'string' || homes.label.trim() === ''
+      || !isFunction(homes.list) || !isFunction(homes.env)) {
+      problems.push('`runtimeProfiles` must be `{ label, list(profile), env(name, profile) }`: a non-empty label and two functions');
+    }
+  }
+
   if (remote) return problems;
 
   // A process: who owns it, and whether its end ends the mission.

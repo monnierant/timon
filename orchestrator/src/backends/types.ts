@@ -498,6 +498,9 @@ export type RegisteredProfile = Omit<BackendProfile, 'envFrom' | 'requiredEnv' |
 export type DiscoveredModel = {
   slug: string;
   supportedReasoningLevels?: string[];
+  /** Past the menu's cap: the picker's search reaches it, its list does not. Only
+   *  a probe asked for a runtime profile's whole list (`ProfileRuntime.runtimeProfile`) marks one. */
+  searchOnly?: boolean;
 };
 
 /**
@@ -517,6 +520,30 @@ export type ProfileRuntime = {
   /** Slugs the profile itself lists. A discovery bounding its answer must not
    *  cut these: the catalogue keeps a static entry only if upstream lists it. */
   knownModels?: readonly string[];
+  /** The runtime profile a model probe runs for (`AgentConfig.runtime_profile`): the
+   *  provider adds that profile's environment (`RuntimeProfilesStrategy.env`), keeps its
+   *  answer apart, and returns the whole list, the models past the menu's cap marked
+   *  `searchOnly`. Absent = the program's own default profile, as before. */
+  runtimeProfile?: string;
+};
+
+/**
+ * The named homes one program keeps on the host, each with its own configuration, models and
+ * sessions (a Hermes profile). An agent picks one (`AgentConfig.runtime_profile`, empty = the
+ * program's default); the provider says which there are and what environment selects one.
+ * Timon never writes into them.
+ */
+export type RuntimeProfilesStrategy = {
+  /** What the agent's field is called ("Hermes profile"). */
+  readonly label: string;
+  /** The names the host has now, the default excluded. Never paths: a browser shows them. */
+  list(profile: ProfileRuntime): Promise<string[]>;
+  /**
+   * The environment that runs the program on `name`, on top of the profile's (`profile.env`
+   * holds what `envFrom` forwarded). Throws, with a sentence a person can act on, for a name
+   * that is not one of the host's.
+   */
+  env(name: string, profile: ProfileRuntime): Record<string, string>;
 };
 
 
@@ -992,6 +1019,8 @@ export interface Dialect {
    * and "supported but unavailable" are not "unsupported".
    */
   accountUsage?(profile: ProfileRuntime, options?: UsageProbeOptions): Promise<AccountUsage | null>;
+  /** Named homes of the program an agent may run on (`ProviderDefinition.runtimeProfiles`). */
+  runtimeProfiles?: RuntimeProfilesStrategy;
   /**
    * Model ids the CLI itself says this account may use, for a provider whose
    * offer depends on the account (an organisation's Copilot policy) and that

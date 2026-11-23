@@ -58,6 +58,10 @@ const ANSWER_TTL_MS = 12 * 60 * 60 * 1000;
  *  not one anybody chooses from, and an agent that lists thousands must not
  *  fill the catalogue. Ids the profile itself names are never cut. */
 export const MAX_DISCOVERED_MODELS = 60;
+/** Most ids kept at all when the ones past the cap are asked for (`keepBeyondCap`):
+ *  they only feed the picker's search, but an agent that lists thousands still must
+ *  not fill the catalogue. */
+export const MAX_PROBED_MODELS = 1000;
 const MAX_ID_CHARS = 200;
 
 /** JSON-RPC "method not found". */
@@ -76,6 +80,10 @@ export type AcpProbeOptions = {
   command: string;
   /** Profile id, the cache key. */
   profileId: string;
+  /** Runtime profile the probe runs for (its environment is already in `open`): part of the cache key. */
+  runtimeProfile?: string;
+  /** Return the ids past `MAX_DISCOVERED_MODELS` too, marked `searchOnly` (bounded by `MAX_PROBED_MODELS`). */
+  keepBeyondCap?: boolean;
   /** The agent's sign-in advice, when its provider declared one. */
   signIn?: AcpSignIn;
   /** The auth method to try once on `auth_required` (`AcpAgentSpec.authenticateWith`). */
@@ -121,7 +129,7 @@ export function selectModels(ids: readonly unknown[], keep: readonly string[] = 
  * keeps the profile's own list.
  */
 export function discoverAcpModels(opts: AcpProbeOptions): Promise<DiscoveredModel[]> {
-  const key = `${opts.profileId}\0${opts.command}`;
+  const key = `${opts.profileId}\0${opts.command}\0${opts.runtimeProfile ?? ''}\0${opts.keepBeyondCap === true ? 'all' : 'menu'}`;
   const now = opts.now ?? Date.now();
   const cached = answers.get(key);
   if (cached && now - cached.at < ANSWER_TTL_MS) return Promise.resolve(cached.models);
@@ -207,12 +215,18 @@ async function probe(opts: AcpProbeOptions): Promise<DiscoveredModel[]> {
     throw failure(opts, new AcpTransportError('spawn', 'spawn'), null);
   }
   const { transport } = channel;
-  const seen: { init: { authMethods?: unknown } | null; slugs: string[] | null } = { init: null, slugs: null };
+  const seen: { init: { authMethods?: unknown } | null; slugs: string[] | null; beyond: string[] } = { init: null, slugs: null, beyond: [] };
   const levels = new Map<string, string[]>();
-  const listed = (slugs: readonly string[]): DiscoveredModel[] => slugs.map((slug) => {
-    const own = levels.get(slug);
-    return own ? { slug, supportedReasoningLevels: own } : { slug };
-  });
+  const listed = (slugs: readonly string[]): DiscoveredModel[] => {
+    const menu = slugs.map((slug): DiscoveredModel => {
+      const own = levels.get(slug);
+      return own ? { slug, supportedReasoningLevels: own } : { slug };
+    });
+    if (seen.beyond.length === 0) return menu;
+    // Past the cap, for the search only: one sorted list, as the agent's ids were.
+    const all = [...menu, ...seen.beyond.map((slug): DiscoveredModel => ({ slug, searchOnly: true }))];
+    return all.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  };
   let deadline: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     deadline = setTimeout(() => reject(new AcpTransportError('timeout', 'probe')), opts.timeoutMs ?? PROBE_TIMEOUT_MS);
@@ -225,8 +239,13 @@ async function probe(opts: AcpProbeOptions): Promise<DiscoveredModel[]> {
       const ids = modelIdsFromSessionNew(created.result);
       if (ids.length === 0) throw new Error(`\`${opts.command}\` returned no model`);
       const current = currentModel(created.result);
-      const slugs = selectModels(ids, [...(opts.keep ?? []), ...(current ? [current] : [])]);
+      const keep = [...(opts.keep ?? []), ...(current ? [current] : [])];
+      const slugs = selectModels(ids, keep);
       seen.slugs = slugs;
+      if (opts.keepBeyondCap === true) {
+        const menu = new Set(slugs);
+        seen.beyond = selectModels(ids, keep, MAX_PROBED_MODELS).filter((id) => !menu.has(id));
+      }
       const own = current ? thoughtLevels(created.result) : null;
       if (current && own) levels.set(current, own.levels);
       await collectLevels(transport, created.sessionId, created.result, slugs, levels, opts.levelsBudgetMs ?? LEVELS_BUDGET_MS);

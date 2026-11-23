@@ -63,6 +63,9 @@ test('wrong types and values are named, not guessed', () => {
   assert.match(problemsOf({ maxPromptBytes: -4 }), /maxPromptBytes/);
   assert.match(problemsOf({ defaultCmd: '' }), /defaultCmd/);
   assert.match(problemsOf({ hostedConnectors: undefined }), /hostedConnectors/);
+  assert.match(problemsOf({ runtimeProfiles: { label: '', list: async () => [], env: () => ({}) } }), /runtimeProfiles/);
+  assert.match(problemsOf({ runtimeProfiles: { label: 'Profile', list: [] } }), /runtimeProfiles/);
+  assert.equal(problemsOf({ runtimeProfiles: { label: 'Profile', list: async () => [], env: () => ({}) } }), '');
   assert.match(dialectProblems(null).join(), /object/);
 });
 

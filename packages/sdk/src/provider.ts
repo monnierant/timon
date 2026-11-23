@@ -78,7 +78,7 @@ export { DEFAULT_MAX_LINE_CHARS } from '../../../orchestrator/src/backends/engin
 export type {
   LegacyLaunch, LifecycleStrategy, LimitsStrategy, LineSessionOptions, LineSplitterOptions, LinesCodec, McpStrategy,
   LaunchStrategy, ModelsStrategy, NativeProviderDefinition, PermissionStrategy, ProcessDriverCodec, ProcessProviderDefinition,
-  ProcessSessionArgs, ProviderDefinition, ReasoningStrategy,
+  ProcessSessionArgs, ProviderDefinition, ReasoningStrategy, RuntimeProfilesStrategy,
   ProviderTransportKind, RemoteDriverCodec, RemoteProviderDefinition, SessionStrategy, UsageStrategy,
 } from '../../../orchestrator/src/backends/engine/index.js';
 

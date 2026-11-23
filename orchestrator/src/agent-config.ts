@@ -35,6 +35,11 @@ export type AgentConfig = {
   /** undefined inherits; null disables browsing; a profile id is an explicit,
    * owner-checked assignment frozen when each mission starts. */
   browser_profile_id?: string | null;
+  /** Named home of the program the agent's backend runs (a Hermes profile), when its
+   *  provider declares some (`RuntimeProfilesStrategy`). Absent = the program's default.
+   *  Missions get that home's environment; its model list is the one the picker shows.
+   *  Timon never writes into it. */
+  runtime_profile?: string;
   /** DEFAULT LLM backend of the agent. 'claude' (default) = long-lived Claude
    *  CLI; 'codex' = one-shot OpenAI Codex CLI on the ChatGPT subscription.
    *  The agent is AGNOSTIC: this field is only a default, overridable per
