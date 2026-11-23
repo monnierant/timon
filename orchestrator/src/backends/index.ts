@@ -15,7 +15,7 @@ import { backendIdForModel, catalogBackend } from './catalog.js';
 import { baseBackendId, isAccountInstanceId, splitBackendInstance } from './instance-id.js';
 import { providerSignedOut } from './sign-in-state.js';
 import { settingStr } from '../settings.js';
-import { projectFromCwd } from '../task-project.js';
+import { configProject } from '../project-folder.js';
 import type { SecretTarget } from '../secrets/resolve.js';
 
 export type {
@@ -94,7 +94,7 @@ export function launchContextFor(spawn: Pick<BuildSpawnOpts, 'missionId' | 'agen
  * layer, from the profile.
  */
 export function secretTargetFor(spawn: Pick<BuildSpawnOpts, 'agentName' | 'cfg'>): SecretTarget {
-  return { agent: spawn.agentName, project: spawn.cfg.project ?? projectFromCwd(spawn.cfg.cwd) ?? null };
+  return { agent: spawn.agentName, project: configProject(spawn.cfg) };
 }
 
 /**

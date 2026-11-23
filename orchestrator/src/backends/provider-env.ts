@@ -18,7 +18,7 @@
  * The mission's token is in neither: it travels as a reference.
  */
 
-import { projectFromCwd } from '../task-project.js';
+import { configProject } from '../project-folder.js';
 import { inheritEnvEnabled, secretsEnvFor, systemEnv } from '../secrets/env.js';
 import type { ProviderEnvPlan } from './provider-services.js';
 import type { BuildSpawnOpts } from './types.js';
@@ -30,7 +30,7 @@ export async function providerEnvPlan(input: {
   passthrough?: readonly string[];
 }): Promise<ProviderEnvPlan> {
   const { spawn } = input;
-  const project = spawn.cfg.project ?? projectFromCwd(spawn.cfg.cwd) ?? null;
+  const project = configProject(spawn.cfg);
   // Late, for the cycle `agent ↔ backends ↔ plugins`: the identity pointers live with the launch.
   const { missionIdentityEnv } = await import('../agent.js');
   const identity = missionIdentityEnv({ missionId: spawn.missionId, agentName: spawn.agentName }, project ?? '');
