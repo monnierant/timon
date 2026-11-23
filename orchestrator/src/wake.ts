@@ -104,6 +104,7 @@ import { mainAgentName, mainAgentNameOrSeed } from './main-agent.js';
 import { settingNum } from './settings.js';
 import { admitAgentMessage, clearAgentPairs, isHumanInput, resetAgentPairs } from './agent-pair-breaker.js';
 import { isMirrorTask } from './task-mirror.js';
+import { missionWaitsForAnswer } from './permissions.js';
 
 /** Aggregation window before a wake — absorbs bursts of task completions.
  *  Short (1 s) to keep the SLA "every inbox processed within a minute" while
@@ -1420,6 +1421,9 @@ export async function askUnclosedTaskMission(
   // Only a task this very mission still holds: a requeued task now belongs to
   // another mission, and a DONE/BLOCKED one already carries its verdict.
   if (!task || task.status !== 'IN_PROGRESS' || task.mission_id !== missionId) return false;
+  // It ended its turn because it waits for the user's answer to a card: it
+  // was told to, and asking it to close its task would contradict that.
+  if (missionWaitsForAnswer(missionId)) return false;
   const count = closureQuestions.get(missionId) ?? { asked: 0, delivered: 0 };
   if (count.asked >= MAX_CLOSURE_QUESTIONS) {
     // A question lost on the way is not one the agent ignored.

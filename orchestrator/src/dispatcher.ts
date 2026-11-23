@@ -31,6 +31,7 @@ import { agentDir } from './paths.js';
 import { notifyUser } from './notify.js';
 import { daemonMessage, type DaemonMessage } from './daemon-message.js';
 import { orchestratorForProject } from './main-agent.js';
+import { missionWaitsForAnswer } from './permissions.js';
 import { messageTime } from './message-dates.js';
 import { CONVENTION_ROLES, inheritedLlm, resolveRoleAgentPreview, roleForTaskType, type RoleAgentPreview } from './agent-seed.js';
 import { evaluateDeps, repairWaitStall, type DepGate } from './merge-gate.js';
@@ -1814,6 +1815,13 @@ export function watchMissionComplete(): () => void {
     // The status set by the agent is authoritative: we only transition
     // non-terminal tasks.
     if (task.status === 'DONE' || task.status === 'BLOCKED') return;
+    // The mission waits for the user's answer to a card (durable cards, ADR
+    // 0002): its process ending is not its task ending. The answer resumes
+    // the same conversation, and the task goes on from there.
+    if (missionWaitsForAnswer(ev.missionId)) {
+      console.log(`[dispatcher] task ${task.id} stays open: mission ${ev.missionId.slice(0, 8)} waits for an answer`);
+      return;
+    }
     // At this point, the mission died WITHOUT the agent closing its task.
     // If it died passively, we qualify the cause instead of posting a
     // silent BLOCKED (indistinguishable from a business block — incident
@@ -1911,6 +1919,8 @@ export async function reconcileOrphanedTasks(graceMs = 0): Promise<void> {
     const m = dbApi.getMission(t.mission_id);
     if (graceMs > 0 && (m?.ended_at ?? 0) > cutoff) continue;
     if (!m) continue;
+    // Not an orphan: it waits for the answer to a card, which will resume it.
+    if (missionWaitsForAnswer(t.mission_id)) continue;
     // A `completed` mission that carries a qualified death cause is a quota
     // death that exited 0 (`finishMission` persisted the cause): the live path
     // blocks it (`ev.reason`), so must this one — DONE would lie.
