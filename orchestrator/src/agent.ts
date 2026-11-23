@@ -3171,7 +3171,7 @@ export async function setMissionModel(
   // attributes to an OTHER backend (switching a claude mission to
   // `gpt-5.5` would kill it on the next spawn). A slug unknown to the
   // catalog goes through — it's the CLI's call, not ours to guess.
-  if (!catalogClaimsModel(backendName, model) && backendForModel(model)) {
+  if (!catalogClaimsModel(backendName, model, cfg.runtime_profile) && backendForModel(model)) {
     throw new Error(
       `model "${model}" does not belong to backend ${backendName} ` +
       `(claimed by ${backendForModel(model)})`,
@@ -4782,6 +4782,8 @@ export function startReaper(intervalMs = REAP_INTERVAL_MS()): () => void {
 
 export type AgentSummary = {
   browser_profile_id?: string | null;
+  /** Named home of the program its backend runs (a Hermes profile); absent = the default. */
+  runtime_profile?: string;
   name: string;
   reports_to?: string | null;
   /** Team id, or null/undefined when the agent belongs to no team. */
@@ -4841,6 +4843,7 @@ export function getAgent(name: string): AgentDetails | null {
     backend: cfg.backend ?? defaultBackendName(),
     cwd: cfg.cwd ?? null,
     browser_profile_id: cfg.browser_profile_id,
+    ...(cfg.runtime_profile ? { runtime_profile: cfg.runtime_profile } : {}),
     model: cfg.model ?? null,
     permission_mode: cfg.permission_mode ?? null,
     allowed_tools: cfg.allowed_tools ?? [],
@@ -5875,6 +5878,7 @@ export function listAgents(): AgentSummary[] {
       backend: cfg.backend ?? implicitBackendName(),
       cwd: cfg.cwd ?? null,
       browser_profile_id: cfg.browser_profile_id,
+      ...(cfg.runtime_profile ? { runtime_profile: cfg.runtime_profile } : {}),
       model: cfg.model ?? null,
       permission_mode: cfg.permission_mode ?? null,
       allowed_tools: cfg.allowed_tools ?? [],

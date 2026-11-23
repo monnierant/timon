@@ -128,6 +128,7 @@ test('keepBeyondCap: the ids past the cap come back too, marked search-only, and
   assert.equal(found.length, 83, 'every model the agent announced');
   assert.equal(found.filter((m) => !m.searchOnly).length, MAX_DISCOVERED_MODELS, 'the menu keeps its cap');
   assert.ok(!found.find((m) => m.slug === 'provider/model-80')!.searchOnly, 'the current model stays in the menu');
+  assert.deepEqual(found.filter((m) => m.current).map((m) => m.slug), ['provider/model-80'], 'the model the agent runs by default is named');
   assert.ok(found.find((m) => m.slug === 'provider/model-79')!.searchOnly, 'a model past the cap is reached by the search only');
   assert.deepEqual(found.map((m) => m.slug), [...all].sort(), 'sorted, nothing invented');
 });

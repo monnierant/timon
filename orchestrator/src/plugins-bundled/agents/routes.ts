@@ -65,6 +65,8 @@ import { listSkillFiles, readSkillFile, SkillFileError } from '../../skill-files
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { apiError } from '../../api-error.js';
+import { runtimeProfileProblem } from '../../backends/catalog.js';
+import { defaultBackendName } from '../../backends/index.js';
 import { launchErrorStatus, missionLaunchErrorBody } from '../../resources.js';
 
 /**
@@ -1166,7 +1168,7 @@ export function registerRoutes(app: express.IRouter): void {
     }
   });
 
-  app.patch('/api/agents/:name/config', (req, res) => {
+  app.patch('/api/agents/:name/config', async (req, res) => {
     if (rejectIfDenied(req, res, 'agents:manage')) return;
     try {
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -1178,7 +1180,7 @@ export function registerRoutes(app: express.IRouter): void {
         'skills', 'mcp_servers', 'excluded_mcp_servers', 'project',
         'emoji', 'color', 'icon_url', 'look', 'avatar',
         'role', 'directives', 'global_context', 'browser_profile_id',
-        'team', 'reports_to', 'memory_scope', 'reasoningEffort',
+        'team', 'reports_to', 'memory_scope', 'reasoningEffort', 'runtime_profile',
       ];
       const patch: Record<string, unknown> = {};
       for (const k of allowed) {
@@ -1198,6 +1200,18 @@ export function registerRoutes(app: express.IRouter): void {
         })());
         if (!effort.ok) { res.status(400).json(apiError('reasoning_effort_refused', effort.error, { detail: effort.error })); return; }
         patch.reasoningEffort = effort.value;
+      }
+      // A runtime profile the host has, on a backend whose provider declares them; empty or
+      // null goes back to the program's default. Timon only names it, never writes into it.
+      if ('runtime_profile' in patch) {
+        if (patch.runtime_profile === null || patch.runtime_profile === '') {
+          patch.runtime_profile = undefined;
+        } else {
+          const saved = (() => { try { return loadConfig(req.params.name); } catch { return null; } })();
+          const backend = typeof patch.backend === 'string' ? patch.backend : saved?.backend ?? defaultBackendName();
+          const problem = await runtimeProfileProblem(backend, patch.runtime_profile);
+          if (problem) { res.status(400).json(apiError('runtime_profile_refused', problem, { detail: problem })); return; }
+        }
       }
       if ('reports_to' in patch) {
         patch.reports_to = checkReportsTo(req.params.name, patch.reports_to);
@@ -1252,7 +1266,7 @@ export function registerRoutes(app: express.IRouter): void {
       const respawnTriggers = [
         'skills', 'mcp_servers', 'excluded_mcp_servers',
         'allowed_tools', 'disallowed_tools', 'model', 'permission_mode',
-        'role', 'directives', 'browser_profile_id', 'memory_scope', 'reasoningEffort',
+        'role', 'directives', 'browser_profile_id', 'memory_scope', 'reasoningEffort', 'runtime_profile',
       ] as const;
       const needsRespawn = respawnTriggers.some((k) => k in patch);
       let killed = 0;

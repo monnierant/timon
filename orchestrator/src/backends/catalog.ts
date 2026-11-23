@@ -26,7 +26,7 @@
 import { modelPreferences, mergeModelPreferences } from './model-preferences.js';
 import { activeProfiles, dialectDeclarations, getDialect, installedProfiles } from './registry.js';
 import { isSecretRef } from './credentials.js';
-import { discoveredModels, refreshAll, type DiscoverySource } from './model-discovery.js';
+import { discoveredModels, refreshAll, refreshModels, runtimeProfileKey, type DiscoverySource } from './model-discovery.js';
 import { profileBaseUrl, resolveModelReasoning, type DeclaredReasoningControl, type ModelReasoning, type ReasoningControl } from './reasoning.js';
 import type { ProviderModelCache, UnverifiedSubject } from './provider-declarations.js';
 import { BUILTIN_DECLARATIONS, signInLine } from './builtin-declarations.js';
@@ -159,11 +159,98 @@ function profiles(): DiscoverySource[] {
     if (!probe) return { profile };
     // A discovery probe opens no mission, so it has no credential to resolve.
     const cmd = isRemoteDialect(dialect) ? '' : profile.cmd ?? dialect.defaultCmd;
-    // What a probe may know of the profile: its non-secret environment (where the
-    // CLI keeps its login) and the models the profile itself lists.
-    const runtime = { id: profile.id, cmd, env: probeEnv(profile), knownModels: profile.models.map((m) => m.slug) };
+    const runtime = probeRuntime(profile, cmd);
     return { profile, discover: () => probe.call(dialect, runtime) };
   });
+}
+
+/** What a probe may know of the profile: its non-secret environment (where the
+ *  CLI keeps its login) and the models the profile itself lists. */
+function probeRuntime(profile: BackendProfile, cmd: string) {
+  return { id: profile.id, cmd, env: probeEnv(profile), knownModels: profile.models.map((m) => m.slug) };
+}
+
+/**
+ * Does `backendId`'s provider declare runtime profiles (`RuntimeProfilesStrategy`)? Read from
+ * its dialect, so an installed backend that is inactive right now still answers, as the
+ * permission modes do (`supportedPermissionModesOf`).
+ */
+export function offersRuntimeProfiles(backendId: string | null | undefined): boolean {
+  if (!backendId) return false;
+  const profile = installedProfiles().find((p) => p.id === baseBackendId(backendId));
+  return !!(profile && getDialect(profile.dialect)?.runtimeProfiles);
+}
+
+/** A runtime profile name as an agent may hold it: what a provider could name a folder, no path. */
+export const RUNTIME_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * Why `name` cannot be `backendId`'s runtime profile on this host, or null when it can:
+ * a clean name, on a backend whose provider declares runtime profiles, that the host has.
+ */
+export async function runtimeProfileProblem(backendId: string, name: unknown): Promise<string | null> {
+  if (typeof name !== 'string' || !RUNTIME_PROFILE_NAME.test(name)) {
+    return 'runtime_profile must be a profile name (letters, digits, `.`, `_`, `-`; 64 at most), or empty for the default';
+  }
+  if (!offersRuntimeProfiles(backendId)) return `runtime_profile: backend ${backendId} has no runtime profiles`;
+  const offered = await runtimeProfilesOf(backendId);
+  if (!offered) return `runtime_profile: backend ${backendId} is not active`;
+  return offered.names.includes(name) ? null : `${offered.label} "${name}" is not one of ${backendId}'s on this host`;
+}
+
+/** The active entry of `backendId` whose provider declares runtime profiles, or undefined. */
+function runtimeProfilesEntry(backendId: string | null | undefined) {
+  if (!backendId) return undefined;
+  const entry = activeProfiles().find((candidate) => !candidate.account && candidate.profile.id === backendId);
+  return entry?.dialect.runtimeProfiles ? { ...entry, homes: entry.dialect.runtimeProfiles } : undefined;
+}
+
+/**
+ * The runtime profiles `backendId`'s program has on this host (`RuntimeProfilesStrategy`):
+ * what the field is called and the names, the default excluded. Null for a backend whose
+ * provider declares none, or that is not active. A listing that fails reads as no name.
+ */
+export async function runtimeProfilesOf(backendId: string): Promise<{ label: string; names: string[] } | null> {
+  const entry = runtimeProfilesEntry(backendId);
+  if (!entry) return null;
+  const cmd = isRemoteDialect(entry.dialect) ? '' : entry.profile.cmd ?? entry.dialect.defaultCmd;
+  let names: string[] = [];
+  try {
+    names = (await entry.homes.list(probeRuntime(entry.profile, cmd))).filter((name) => typeof name === 'string' && name !== '');
+  } catch { /* the host cannot tell: no name to offer */ }
+  return { label: entry.homes.label, names };
+}
+
+/**
+ * Asks `backendId`'s program for the models of its runtime profile `name` (the provider's
+ * probe, run in that profile's environment), unless the last answer is recent or `force`.
+ * Rejects for a name the host does not have, or a backend without runtime profiles or probe;
+ * a probe that fails leaves the previous list, as the backend's own discovery does.
+ */
+export async function refreshRuntimeProfileModels(backendId: string, name: string, force = false): Promise<void> {
+  const entry = runtimeProfilesEntry(backendId);
+  const probe = entry?.dialect.discoverModels;
+  if (!entry || !probe) throw new Error(`backend ${backendId} has no runtime profiles`);
+  const offered = await runtimeProfilesOf(backendId);
+  if (!offered?.names.includes(name)) {
+    throw new Error(`${entry.homes.label} "${name}" is not one of ${backendId}'s on this host`);
+  }
+  const cmd = isRemoteDialect(entry.dialect) ? '' : entry.profile.cmd ?? entry.dialect.defaultCmd;
+  const runtime = { ...probeRuntime(entry.profile, cmd), runtimeProfile: name };
+  await refreshModels(entry.profile, force, () => probe.call(entry.dialect, runtime), runtimeProfileKey(backendId, name));
+}
+
+/**
+ * `backendId`'s catalogue entry with the model list of its runtime profile `name`: every
+ * model that profile's agent announced, the ones past the menu's cap marked `searchOnly`.
+ * Empty while that list was never read (`refreshRuntimeProfileModels`); undefined for a
+ * backend without runtime profiles.
+ */
+export function runtimeProfileCatalog(backendId: string, name: string): CatalogBackend | undefined {
+  if (!runtimeProfilesEntry(backendId)) return undefined;
+  const base = staticCatalogEntries().find((b) => b.id === backendId);
+  if (!base) return undefined;
+  return withModels(base, discoveredModels(runtimeProfileKey(backendId, name)) ?? []);
 }
 
 /** The `envFrom` of a profile that is not a credential: a vault reference of
@@ -195,28 +282,32 @@ function withCacheSlugs(profileModels: CatalogModel[], cacheSlugs: readonly stri
  *  `backendIdForModel`), which must stay purely local and synchronous —
  *  they are on the dispatch path. */
 function currentBackends(): CatalogBackend[] {
-  return staticCatalogEntries().map((b) => {
-    // Discovered if it exists, static otherwise: an unreachable endpoint returns the
-    // repo's list, never an empty list.
-    const found = discoveredModels(b.instanceOf ?? b.id);
-    const preferences = modelPreferences(b.instanceOf ?? b.id);
-    // For a CLI that lists the account's models itself (Codex), merge the slugs from the
-    // account's cache that the frozen profile does not already list. Cache absent → fall
-    // back to the profile list. Uses the same set that withReasoning consults.
-    // The cache file's mtime guards staleness.
-    const cacheSlugs = modelCaches.get(b.instanceOf ?? b.id)?.slugs();
-    const base = cacheSlugs ? withCacheSlugs(b.models, cacheSlugs) : b.models;
-    const all = mergeModelPreferences(base, found, preferences?.models, preferences?.removed);
-    // A provider the user added declares its windows in its own file: every
-    // figure there was typed by them.
-    const marked = b.custom
-      ? all.map((model) => (model.contextWindow ? { ...model, contextWindowDeclared: true } : model))
-      : all;
-    const models = withReasoning(b, marked.filter((model) => !model.hidden));
-    const selected = preferences?.defaultModel === undefined ? b.defaultModel : preferences.defaultModel;
-    const defaultModel = selected && models.some((model) => model.slug === selected) ? selected : models[0]?.slug ?? null;
-    return { ...b, models, defaultModel };
-  });
+  // Discovered if it exists, static otherwise: an unreachable endpoint returns the
+  // repo's list, never an empty list.
+  return staticCatalogEntries().map((b) => withModels(b, discoveredModels(b.instanceOf ?? b.id)));
+}
+
+/** `b` with `found` (discovered, or null for none) merged into its models, as the catalogue shows them. */
+function withModels(b: CatalogBackend, found: CatalogModel[] | null): CatalogBackend {
+  const preferences = modelPreferences(b.instanceOf ?? b.id);
+  // For a CLI that lists the account's models itself (Codex), merge the slugs from the
+  // account's cache that the frozen profile does not already list. Cache absent → fall
+  // back to the profile list. Uses the same set that withReasoning consults.
+  // The cache file's mtime guards staleness.
+  const cacheSlugs = modelCaches.get(b.instanceOf ?? b.id)?.slugs();
+  const base = cacheSlugs ? withCacheSlugs(b.models, cacheSlugs) : b.models;
+  const all = mergeModelPreferences(base, found, preferences?.models, preferences?.removed);
+  // A provider the user added declares its windows in its own file: every
+  // figure there was typed by them.
+  const marked = b.custom
+    ? all.map((model) => (model.contextWindow ? { ...model, contextWindowDeclared: true } : model))
+    : all;
+  const models = withReasoning(b, marked.filter((model) => !model.hidden));
+  // A runtime profile's list names the model its agent runs when none is asked for: that one.
+  const agentDefault = models.find((model) => model.current)?.slug;
+  const selected = agentDefault ?? (preferences?.defaultModel === undefined ? b.defaultModel : preferences.defaultModel);
+  const defaultModel = selected && models.some((model) => model.slug === selected) ? selected : models[0]?.slug ?? null;
+  return { ...b, models, defaultModel };
 }
 
 /**
@@ -410,8 +501,15 @@ export function resolvedPermissionModeFor(backend: string | null | undefined, mo
 export function catalogClaimsModel(
   backendId: string | null | undefined,
   model: string | null | undefined,
+  runtimeProfile?: string | null,
 ): boolean {
   if (!backendId || !model) return false;
+  // On a runtime profile, the list that profile's agent announced, the models past the
+  // menu's cap included (`runtimeProfileCatalog`); not read yet, the backend's own.
+  if (runtimeProfile) {
+    const own = discoveredModels(runtimeProfileKey(backendId, runtimeProfile));
+    if (own?.some((m) => m.slug === model) && runtimeProfilesEntry(backendId)) return true;
+  }
   const b = catalogBackend(backendId);
   if (!b) return false;
   if (modelIsHidden(backendId, model)) return false;

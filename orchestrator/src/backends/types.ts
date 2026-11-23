@@ -501,6 +501,9 @@ export type DiscoveredModel = {
   /** Past the menu's cap: the picker's search reaches it, its list does not. Only
    *  a probe asked for a runtime profile's whole list (`ProfileRuntime.runtimeProfile`) marks one. */
   searchOnly?: boolean;
+  /** The model the agent runs when none is named (its current model when the session opened).
+   *  Marked by a probe asked for a runtime profile's whole list only. */
+  current?: boolean;
 };
 
 /**

@@ -24,7 +24,7 @@ import { auditRequest } from './audit-actor.js';
 import { requestHasPermission, forbidden } from './identity.js';
 import { isDeveloperAccount } from './agent-permissions.js';
 import { userAllows } from './permissions.js';
-import { catalogBackend, catalogClaimsModel, resolvedPermissionModeFor } from '../backends/catalog.js';
+import { RUNTIME_PROFILE_NAME, catalogBackend, catalogClaimsModel, offersRuntimeProfiles, resolvedPermissionModeFor } from '../backends/catalog.js';
 import { implicitBackendName, defaultBackendName } from '../backends/index.js';
 import { accountInstanceRefusal } from '../backends/account-launch.js';
 import { loadConfig, type AgentConfig } from '../agent-config.js';
@@ -331,9 +331,34 @@ function backendRefusal(backend: string, authority: OverrideAuthority): string |
   return null;
 }
 
-function modelRefusal(backend: string, model: string): string | null {
-  if (!catalogClaimsModel(backend, model)) {
-    return `model ${model} is not in the catalogue of backend ${backend}`;
+function modelRefusal(backend: string, model: string, runtimeProfile?: string | null): string | null {
+  if (!catalogClaimsModel(backend, model, runtimeProfile)) {
+    return runtimeProfile
+      ? `model ${model} is not in the catalogue of backend ${backend} on its profile ${runtimeProfile}`
+      : `model ${model} is not in the catalogue of backend ${backend}`;
+  }
+  return null;
+}
+
+/**
+ * `runtime_profile` of an agent's config: empty (the program's default) or a clean name, on a
+ * backend whose provider declares runtime profiles. Which names the host has is the route's
+ * to check (`runtimeProfileProblem`, asynchronous). Another profile carries its own sign-in and
+ * providers, so changing it, back to the default included, is the `agents:privileged-config`
+ * permission's, as a backend is.
+ */
+function runtimeProfileRefusal(
+  wanted: unknown, backend: string, current: AgentConfig | null, authority: OverrideAuthority,
+): string | null {
+  const name = wanted === undefined || wanted === null ? '' : wanted;
+  if (name !== '') {
+    if (typeof name !== 'string' || !RUNTIME_PROFILE_NAME.test(name)) {
+      return 'runtime_profile must be a profile name (letters, digits, `.`, `_`, `-`; 64 at most), or empty for the default';
+    }
+    if (!offersRuntimeProfiles(backend)) return `runtime_profile: backend ${backend} has no runtime profiles`;
+  }
+  if (!authority.relaxed && name !== (current?.runtime_profile ?? '')) {
+    return `runtime_profile ${name === '' ? '(default)' : String(name)} differs from what an administrator set for this agent: changing it needs the ${PRIVILEGED_CONFIG_PERMISSION} permission`;
   }
   return null;
 }
@@ -760,12 +785,20 @@ export function agentConfigRefusal(
     const refusal = backendRefusal(patch.backend, authority);
     if (refusal) return refusal;
   }
+  if ('runtime_profile' in patch) {
+    const refusal = runtimeProfileRefusal(patch.runtime_profile, runsOn, current, authority);
+    if (refusal) return refusal;
+  }
+  // The runtime profile the agent will run on: the one asked for, else the one it holds.
+  const runtimeProfile = 'runtime_profile' in patch
+    ? (typeof patch.runtime_profile === 'string' ? patch.runtime_profile : '')
+    : current?.runtime_profile ?? '';
   if ('model' in patch && patch.model !== undefined && patch.model !== null) {
     if (typeof patch.model !== 'string') return 'model must be a string';
     const backend = typeof patch.backend === 'string' ? patch.backend : backendOf(current);
-    // The model of an agent that stays on its backend is the admin's choice.
-    if (!(same('model') && backend === backendOf(current))) {
-      const refusal = modelRefusal(backend, patch.model);
+    // The model of an agent that stays on its backend (and its runtime profile) is the admin's choice.
+    if (!(same('model') && backend === backendOf(current) && runtimeProfile === (current?.runtime_profile ?? ''))) {
+      const refusal = modelRefusal(backend, patch.model, runtimeProfile);
       if (refusal) return refusal;
     }
   }

@@ -33,6 +33,12 @@ export type CatalogModel = {
   addedAt?: number;
   /** Hidden entries remain editable but never appear in the active catalogue. */
   hidden?: boolean;
+  /** Announced by the agent past the menu's cap (`MAX_DISCOVERED_MODELS`), in the list of a
+   *  runtime profile only: the picker's search finds it, its list does not show it. */
+  searchOnly?: boolean;
+  /** The model the agent runs when none is named, as it announced it, in the list of a runtime
+   *  profile only: that list's `defaultModel`. */
+  current?: boolean;
   /** Label in the backend's "model" dropdown. */
   label: string;
   /** Context window size in tokens, if known from a reliable source. */

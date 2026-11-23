@@ -215,12 +215,13 @@ async function probe(opts: AcpProbeOptions): Promise<DiscoveredModel[]> {
     throw failure(opts, new AcpTransportError('spawn', 'spawn'), null);
   }
   const { transport } = channel;
-  const seen: { init: { authMethods?: unknown } | null; slugs: string[] | null; beyond: string[] } = { init: null, slugs: null, beyond: [] };
+  const seen: { init: { authMethods?: unknown } | null; slugs: string[] | null; beyond: string[]; current: string | null } = { init: null, slugs: null, beyond: [], current: null };
   const levels = new Map<string, string[]>();
   const listed = (slugs: readonly string[]): DiscoveredModel[] => {
     const menu = slugs.map((slug): DiscoveredModel => {
       const own = levels.get(slug);
-      return own ? { slug, supportedReasoningLevels: own } : { slug };
+      const model: DiscoveredModel = own ? { slug, supportedReasoningLevels: own } : { slug };
+      return slug === seen.current ? { ...model, current: true } : model;
     });
     if (seen.beyond.length === 0) return menu;
     // Past the cap, for the search only: one sorted list, as the agent's ids were.
@@ -243,6 +244,7 @@ async function probe(opts: AcpProbeOptions): Promise<DiscoveredModel[]> {
       const slugs = selectModels(ids, keep);
       seen.slugs = slugs;
       if (opts.keepBeyondCap === true) {
+        seen.current = current ?? null;
         const menu = new Set(slugs);
         seen.beyond = selectModels(ids, keep, MAX_PROBED_MODELS).filter((id) => !menu.has(id));
       }

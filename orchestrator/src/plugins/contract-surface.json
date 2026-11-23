@@ -2275,6 +2275,8 @@
         "tier?": "\"flagship\" | \"mid\" | \"small\" | undefined",
         "addedAt?": "number | undefined",
         "hidden?": "boolean | undefined",
+        "searchOnly?": "boolean | undefined",
+        "current?": "boolean | undefined",
         "label": "string",
         "contextWindow?": "number | undefined",
         "contextWindowDeclared?": "boolean | undefined",
@@ -2323,7 +2325,8 @@
       "members": {
         "slug": "string",
         "supportedReasoningLevels?": "string[] | undefined",
-        "searchOnly?": "boolean | undefined"
+        "searchOnly?": "boolean | undefined",
+        "current?": "boolean | undefined"
       }
     },
     "ModelReasoning": {

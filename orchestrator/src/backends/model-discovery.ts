@@ -66,6 +66,15 @@ export function discoveredModels(profileId: string): CatalogModel[] | null {
   return state.get(profileId)?.models ?? null;
 }
 
+/**
+ * The key of the list a backend's probe answers for one runtime profile of its
+ * program (`AgentConfig.runtime_profile`): kept apart from the backend's own list,
+ * which stays the one every agent without a runtime profile sees.
+ */
+export function runtimeProfileKey(profileId: string, runtimeProfile: string): string {
+  return `${profileId}\u0000${runtimeProfile}`;
+}
+
 /** Last discovery error for this profile, for diagnosis purposes. */
 export function discoveryError(profileId: string): string | null {
   return state.get(profileId)?.lastError ?? null;
@@ -97,6 +106,8 @@ function merge(profile: BackendProfile, found: DiscoveredModel[]): CatalogModel[
       slug: m.slug,
       label: m.slug,
       ...(m.supportedReasoningLevels ? { supportedReasoningLevels: m.supportedReasoningLevels } : {}),
+      ...(m.searchOnly === true ? { searchOnly: true } : {}),
+      ...(m.current === true ? { current: true } : {}),
     }));
   return [...known, ...fresh];
 }
@@ -146,15 +157,17 @@ async function fetchSlugs(profile: BackendProfile): Promise<string[]> {
 /**
  * Refreshes a profile's list if the TTL has elapsed. Never rejects:
  * a failure leaves the previous state in place and is merely noted.
+ * `key`: where the answer is kept, the profile's id unless the probe runs for
+ * one runtime profile (`runtimeProfileKey`).
  */
-export function refreshModels(profile: BackendProfile, force = false, discover?: Discoverer): Promise<void> {
-  if (!profile.modelsEndpoint && !discover) return Promise.resolve();
-  const e = entryOf(profile.id);
+export function refreshModels(profile: BackendProfile, force = false, discover?: Discoverer, key = profile.id): Promise<void> {
+  if (!discover && (!profile.modelsEndpoint || key !== profile.id)) return Promise.resolve();
+  const e = entryOf(key);
   if (e.inflight) return e.inflight;
   if (!force && Date.now() - e.attemptedAt < TTL_MS) return Promise.resolve();
   e.inflight = (async () => {
     try {
-      const found = profile.modelsEndpoint
+      const found = profile.modelsEndpoint && key === profile.id
         ? (await fetchSlugs(profile)).map((slug): DiscoveredModel => ({ slug }))
         : await discoverSlugs(discover!);
       e.models = merge(profile, found);

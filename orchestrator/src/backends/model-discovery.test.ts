@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { refreshModels, discoveredModels, discoveryError } from './model-discovery.js';
+import { refreshModels, discoveredModels, discoveryError, runtimeProfileKey } from './model-discovery.js';
 import type { BackendProfile } from './types.js';
 
 /** A minimal profile, a different id per test: the discovery state is a
@@ -189,4 +189,16 @@ test('the levels a probe reports reach the catalogue; the profile\'s own levels 
     ['org-only', ['high']],
     ['plain', undefined],
   ]);
+});
+
+test('a runtime profile keeps its own list next to the backend\'s, and the models past the cap stay search-only', async () => {
+  const { modelsEndpoint: _dropped, ...base } = profileOf('disco-homes');
+  const p: BackendProfile = base;
+  await refreshModels(p, true, async () => ['known-a', 'plain']);
+  const key = runtimeProfileKey('disco-homes', 'alpha');
+  await refreshModels(p, true, async () => ['alpha-1', { slug: 'alpha-far', searchOnly: true }], key);
+  assert.deepEqual(discoveredModels('disco-homes')?.map((m) => m.slug), ['known-a', 'plain'], 'the backend\'s own list is untouched');
+  assert.deepEqual(discoveredModels(key)?.map((m) => [m.slug, m.searchOnly]), [['alpha-1', undefined], ['alpha-far', true]]);
+  assert.notEqual(key, runtimeProfileKey('disco-homes', 'beta'));
+  assert.notEqual(key, 'disco-homes');
 });

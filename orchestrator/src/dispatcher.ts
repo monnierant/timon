@@ -686,7 +686,7 @@ export function resolveRoleSpec(
   // (an aggregator and the model's own vendor). `backendForModel` only
   // designates one — trusting it alone would wrongly cancel a model the
   // effective backend actually serves.
-  const modelBackend = catalogClaimsModel(effectiveBackend, model)
+  const modelBackend = catalogClaimsModel(effectiveBackend, model, cfg.runtime_profile)
     ? effectiveBackend
     : backendForModel(model);
   if (model && modelBackend && modelBackend !== effectiveBackend) {
@@ -765,7 +765,7 @@ export function resolveTaskLlm(
   const modelKey = `${backend}\u0000${model}`;
   let modelBackend = cache?.modelBackend?.get(modelKey);
   if (modelBackend === undefined) {
-    modelBackend = catalogClaimsModel(backend, model) ? backend : backendForModel(model);
+    modelBackend = catalogClaimsModel(backend, model, cfg.runtime_profile) ? backend : backendForModel(model);
     cache?.modelBackend?.set(modelKey, modelBackend);
   }
   if (modelBackend && modelBackend !== backend) model = null;
