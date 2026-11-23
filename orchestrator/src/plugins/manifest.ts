@@ -104,7 +104,13 @@ import { reservedRouteSegment } from './reserved-routes.js';
  * keeps for one profile it launches, across its missions (the CLI's sessions
  * and settings), which only that profile's missions reach through the fence.
  * API 17 shipped in 0.1.9, so a new member opens a new wave
- * (docs/SDK-COMPAT.md §121).
+ * (docs/SDK-COMPAT.md §121). Same wave: `runtimeProfiles`
+ * (`RuntimeProfilesStrategy`) on a provider, a dialect and an ACP agent spec,
+ * the named homes of the program an agent may run on;
+ * `ProfileRuntime.runtimeProfile`, `ProviderAgentConfig.runtime_profile`, and
+ * `DiscoveredModel` / `CatalogModel` `searchOnly` and `current`. All optional:
+ * a provider that declares none behaves as before. No member of
+ * `PluginContext` changes.
  */
 export const PLUGIN_API_VERSION = 18;
 

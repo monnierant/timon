@@ -7,6 +7,18 @@
 
 ## Properties
 
+### current?
+
+> `optional` **current?**: `boolean`
+
+***
+
+### searchOnly?
+
+> `optional` **searchOnly?**: `boolean`
+
+***
+
 ### slug
 
 > **slug**: `string`

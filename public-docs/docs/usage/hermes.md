@@ -28,6 +28,18 @@ If Hermes does not appear, run `timon doctor`: it tells you whether the `hermes-
 
 Timon does not pick a model for Hermes: the default is Hermes' own. The model picker lists what your Hermes account offers — dozens of models on some accounts — and you can search it. The list is asked from Hermes and refreshed at most every 12 hours; opening it starts Hermes briefly, which leaves one empty session in Hermes' own history. A model change applies from the next session.
 
+## Hermes profiles
+
+Hermes can keep several profiles on one machine (`hermes profile create work`), each with its own configuration, model providers, keys, skills and sessions. A Timon agent can run on one of them: in the agent editor, the **LLM** tab of a Hermes agent has a **Hermes profile** field that lists the profiles of the machine that runs Timon. Leave it empty to run on Hermes' default profile, as before.
+
+- The agent's missions start Hermes on that profile, the same way `hermes --profile <name>` does. Timon reads the profile names and never writes into a profile: create, edit and delete profiles with Hermes.
+- The model picker of that agent shows the models that profile offers, asked from Hermes on that profile and kept apart from the default profile's list. The list stops at 60 models; when a profile offers more, the picker's search still finds the others, and you can save any of them. Without a model, the agent runs on the profile's own default model.
+- Several agents can share a profile, and two agents on two profiles each see their own list.
+- Changing an agent's profile, back to the default included, needs the same permission as changing its backend: an administrator, or a user granted the agent's privileged settings. The name must be one of the profiles Hermes lists on the machine.
+- A profile that has been deleted since stays on the agent, marked as missing: its missions do not start until you pick another profile or the default.
+
+Timon finds the profiles where Hermes keeps them: under `~/.hermes/profiles` (`%LOCALAPPDATA%\hermes\profiles` on Windows), or under the `HERMES_HOME` the service runs with. A [Hermes Gateway](./hermes-gateway.md) backend has no profile field: the gateway runs on the profile it was started with.
+
 ## What agents can do
 
 Hermes **asks before it uses a tool**. The request appears as an **Allow / Deny** card, like on the other backends: **Allow** lets that one action through, **Deny** refuses it and Hermes carries on without it. When Hermes offers it, **Allow for this session** or **Always allow** lets Hermes remember the approval on its side; nothing is allowed wider unless you click one of them. On an autonomous mission with nobody to answer, a card left open ends in a refusal after the usual delay.

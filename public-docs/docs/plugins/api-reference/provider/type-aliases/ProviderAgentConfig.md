@@ -64,3 +64,9 @@
 ### reasoningEffort?
 
 > `optional` **reasoningEffort?**: `string` \| `null`
+
+***
+
+### runtime\_profile?
+
+> `optional` **runtime\_profile?**: `string`

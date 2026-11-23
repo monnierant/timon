@@ -99,6 +99,12 @@
 
 ***
 
+### runtimeProfiles?
+
+> `optional` **runtimeProfiles?**: [`RuntimeProfilesStrategy`](../type-aliases/RuntimeProfilesStrategy.md)
+
+***
+
 ### sessionResumable
 
 > `readonly` **sessionResumable**: `boolean`

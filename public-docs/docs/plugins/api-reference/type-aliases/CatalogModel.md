@@ -31,6 +31,12 @@
 
 ***
 
+### current?
+
+> `optional` **current?**: `boolean`
+
+***
+
 ### hidden?
 
 > `optional` **hidden?**: `boolean`
@@ -76,6 +82,12 @@
 ### reportedReasoningLevels?
 
 > `optional` **reportedReasoningLevels?**: `string`[]
+
+***
+
+### searchOnly?
+
+> `optional` **searchOnly?**: `boolean`
 
 ***
 
