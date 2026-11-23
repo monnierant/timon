@@ -44,6 +44,12 @@ The directory must already exist on the machine. A workspace you name must exist
 
 The project role is the normal default for a task; task-specific overrides are useful for exceptions. A project path is not a container path unless the daemon actually executes inside that container.
 
+## Where an agent without a folder works
+
+A mission runs in its task's worktree when it has one, else in the agent's working directory. When it has neither, it runs in the folder of its project: the project of the task it runs, else the agent's own **Project**. It ran in the folder Timon itself was started from before, and still does when there is no project, when the task's project has no folder (the agent's project folder is not borrowed then), or when Timon cannot use the folder (it was moved or deleted, for instance). A backend that runs on another machine is not affected.
+
+The folder does not attach the mission to the project: its skills, memory and secrets are chosen as before, from the agent's **Project** or its own working directory. The mission fence opens the project's folder to that mission the way it opens an agent's folder. Give the agent a working directory, or a **Project**, to attach it to the project as well.
+
 ## Docker containers
 
 When a project's directory runs a Docker Compose stack, the project card and the chat's **Docker** widget show its containers, their local address, and **Start**, **Stop**, **Restart** and **Rebuild** buttons, for the whole stack or one container.
