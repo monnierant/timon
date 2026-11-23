@@ -392,6 +392,8 @@ The Allow / Deny card that appears when an agent wants to run something sensitiv
 
 When the request is a one-line shell command and your account may open a terminal, the card offers a third choice between **Allow** and **Deny**: **Paste into a terminal** refuses the command to the agent and types it, without Enter, in the terminal of the mission's project, for you to run.
 
+A card, like a `question`, waits for you as long as it takes: past a few minutes the agent ends its turn, and your answer resumes the same conversation, even after a restart of Timon. See [Cards that wait for your answer](settings.md#cards-that-wait-for-your-answer-permissions).
+
 ## The guided tour
 
 The guided tour is switched off in this version: Timon does not offer it, and the appearance menu has no **Guided tour** item. The rest of this section describes it for when it comes back.
