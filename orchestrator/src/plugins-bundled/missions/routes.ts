@@ -1168,6 +1168,9 @@ export function registerRoutes(
   app.delete('/api/missions/:id', (req, res) => {
     const owned = ownedMissionOr404(req, res);
     if (!owned) return;
+    // Killing a mission ends it: its cards, set aside ones included, close
+    // with it. Its process exit alone only sets them aside (durable cards).
+    expirePendingForMission(owned.id);
     const outcome = killAgent(owned.id, { source: 'DELETE /api/missions/:id', actor: requestActor(req) });
     if (outcome !== 'not_found') auditRequest(req, 'mission.kill', owned.id);
     if (outcome === 'not_found') {

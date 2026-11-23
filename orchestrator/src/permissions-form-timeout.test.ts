@@ -12,6 +12,8 @@ import { removeHomeOnExit } from '../tests/helpers/test-home.js';
 
 const TMP_HOME = mkdtempSync(join(tmpdir(), 'timon-form-timeout-test-'));
 process.env.TIMON_HOME = TMP_HOME;
+// Delays apply without durable cards (ADR 0002): a durable card never expires.
+process.env.TIMON_PERMISSION_LIVE_WAIT_MS = '0';
 removeHomeOnExit(TMP_HOME);
 
 const { requestPermission, listPending, resolvePermission, cardTimeoutMs } = await import('./permissions.js');

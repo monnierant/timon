@@ -315,6 +315,10 @@ export const SETTINGS: SettingDef[] = [
     label: 'Grace before retiring an abandoned card', advanced: true,
     description: "When the agent stops waiting for a card (call cancelled, MCP bridge gone), the card is retired after this delay, unless the bridge reconnects to it first. Longer than the bridge's own reconnect backoff, so a dropped socket is not mistaken for a cancellation." },
 
+  { key: 'TIMON_PERMISSION_LIVE_WAIT_MS', type: 'int', default: 240_000, group: 'Permissions', unit: 'ms',
+    label: 'Live wait on an unanswered card',
+    description: "How long an agent's call waits on a question or an approval card before it is told to end its turn. The card stays open, survives a restart, and your answer resumes the mission with it, however late. Kept under 5 minutes, the limit some agents put on a single call. 0 restores the former behaviour: the call waits, an unattended mission refuses after its delay, and a mission nobody watches may not ask you a question." },
+
   // ── Wake ──────────────────────────────────────────────────────────────
   { key: 'TIMON_WAKE_SWEEP_MS', type: 'int', default: 30_000, group: 'Wake', unit: 'ms',
     label: 'Inbox sweep frequency',

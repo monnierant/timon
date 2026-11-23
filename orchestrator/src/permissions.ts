@@ -27,10 +27,11 @@
  * No timeout: if the user never clicks, the agent just waits. That mirrors an
  * interactive CLI session, where a permission prompt blocks indefinitely.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { bus, type BusEvent } from './bus.js';
 import { dbApi } from './db.js';
-import { getTurnState, respawnWithResume, sendToAgent, isAutonomousMission } from './agent.js';
+import { getTurnState, isRunning, respawnWithResume, sendToAgent, isAutonomousMission } from './agent.js';
+import { deliverLate } from './late-delivery.js';
 import { notifyUser } from './notify.js';
 import { daemonMessage } from './daemon-message.js';
 import { closePushFor, createNotification } from './notifications.js';
@@ -86,6 +87,20 @@ const PUSHED_TIMEOUT_MS = (): number => settingNum('TIMON_PERMISSION_PUSHED_TIME
  */
 const FORM_TIMEOUT_MS = (): number => settingNum('TIMON_PERMISSION_FORM_TIMEOUT_MS');
 const DETACH_GRACE_MS = (): number => settingNum('TIMON_PERMISSION_DETACH_GRACE_MS');
+/**
+ * Durable cards (ADR 0002). A card closes on its answer, or with its mission —
+ * never on a timer. The agent's call waits on it only this long: past it the
+ * card is set aside (`parkPending`), the agent is told to end its turn, and the
+ * answer, whenever it comes, resumes the mission. Under 5 minutes because some
+ * agents (Hermes) give up a call after 300 s, and a refusal the agent did not
+ * ask for is worse than a clean hand-off. 0 turns the whole mechanism off: the
+ * call waits, an unattended mission refuses on its delay, as before.
+ */
+const LIVE_WAIT_MS = (): number => settingNum('TIMON_PERMISSION_LIVE_WAIT_MS');
+function durableCards(): boolean {
+  const ms = LIVE_WAIT_MS();
+  return Number.isFinite(ms) && ms > 0;
+}
 /**
  * Hard ceiling: the reaper SIGTERMs a turn that stayed silent for over
  * `TIMON_REAP_HUNG_MS` (45 min). A turn waiting on a card emits nothing, so its
@@ -173,10 +188,140 @@ type Pending = {
   /** Auto-deny delay ACTUALLY applied (0 = never). May be extended along the
    *  way if the push reaches a device — cf. `adaptTimeoutToPush`. */
   timeout_ms: number;
+  /** When the card was set aside: nobody waits on it live, its answer resumes
+   *  the mission (`parkPending`). */
+  parked_at?: number;
   resolve: (decision: PermissionDecision) => void;
 };
 
 const PENDING = new Map<string, Pending>();
+
+/** What an Allow given on a set-aside card is bound to: the tool and its exact
+ *  input, before any masking (the stored card is masked). */
+function inputKey(toolName: string, input: unknown): string {
+  return createHash('sha256').update(`${toolName}\0${JSON.stringify(input ?? null)}`).digest('hex');
+}
+
+/** Writes the card to `pending_cards`, so a restart does not lose it. A failed
+ *  write costs the card its durability, never the card itself. */
+function persistCard(p: Pending): void {
+  try {
+    const { resolve: _resolve, onPaste: _onPaste, ...card } = p;
+    dbApi.insertPendingCard({
+      id: p.id, mission_id: p.mission_id, agent: p.agent, tool_name: p.tool_name, tool_use_id: p.tool_use_id,
+      card, input_key: inputKey(p.tool_name, p.input), created_at: p.created_at, parked_at: p.parked_at ?? null,
+    });
+  } catch (err) {
+    console.warn(`[permissions] card ${p.id.slice(0, 8)} not persisted: ${(err as Error).message}`);
+  }
+}
+
+/** Every way a card leaves: answered, expired, retired. */
+function dropPending(id: string): void {
+  PENDING.delete(id);
+  try { dbApi.deletePendingCard(id); } catch (err) {
+    console.warn(`[permissions] card ${id.slice(0, 8)} not removed from the store: ${(err as Error).message}`);
+  }
+}
+
+/** The answer an agent gets when its card is set aside: no refusal, a hand-off. */
+export function parkedCardMessage(p: Pick<Pending, 'tool_name'>): string {
+  return p.tool_name === 'ask_user'
+    ? 'Your question was put to the user, who has not answered yet. It stays open: end your turn now, '
+      + 'without guessing the answer. Their answer will come back to you as a message, and resume this mission.'
+    : `Your request to use \`${p.tool_name}\` was put to the user, who has not answered yet. It stays open: `
+      + 'end your turn now, and do not work around it. Their answer will come back to you as a message; '
+      + 'if they allow it, call the same tool again with the same input.';
+}
+
+/**
+ * Sets a card aside: its waiter gets `parkedCardMessage` (the agent ends its
+ * turn), the card stays open in memory and in the store, and its answer will
+ * resume the mission (`resumeAfterAnswer`). Its task shows as waiting for an
+ * answer, and leaves the work in progress (`dbApi.missionsWaitingForAnswer`).
+ */
+function parkPending(id: string, cause: 'live_wait' | 'mission_end'): void {
+  clearTimer(id);
+  const p = PENDING.get(id);
+  if (!p || p.parked_at !== undefined) return;
+  p.parked_at = Date.now();
+  const waiter = p.resolve;
+  p.resolve = () => { /* nobody waits on a set-aside card */ };
+  try { waiter({ behavior: 'deny', message: parkedCardMessage(p) }); } catch { /* */ }
+  try { dbApi.parkPendingCard(id, p.parked_at); } catch (err) {
+    console.warn(`[permissions] card ${id.slice(0, 8)} not marked as set aside: ${(err as Error).message}`);
+  }
+  const payload = { id, cause };
+  const row = dbApi.insertEvent(p.mission_id, 'permission_parked', payload);
+  bus.publish({ kind: 'event', missionId: p.mission_id, type: 'permission_parked', timestamp: row.timestamp, payload });
+  console.log(`[permissions] set aside ${id.slice(0, 8)} (mission ${p.mission_id.slice(0, 8)}, ${p.tool_name}, ${cause}): the answer will resume it`);
+}
+
+/**
+ * True while a card of this mission is open and durable cards are on: the
+ * mission waits for the user, so its end is not its task's end, and nobody asks
+ * it to close its task. Read by the dispatcher and the wake loop.
+ */
+export function missionWaitsForAnswer(missionId: string): boolean {
+  try {
+    if (!durableCards()) return dbApi.missionHasParkedCard(missionId);
+    for (const p of PENDING.values()) if (p.mission_id === missionId) return true;
+    // The store too: at boot it holds the cards not yet put back in memory.
+    return dbApi.missionHasPendingCard(missionId);
+  } catch { return false; }
+}
+
+/**
+ * Puts back, at boot, the cards the store kept: each one set aside, since the
+ * call that asked died with the previous process. A card whose mission is gone
+ * is dropped. Returns how many came back.
+ */
+export function restorePendingCards(): number {
+  let restored = 0;
+  for (const row of dbApi.listPendingCards()) {
+    if (PENDING.has(row.id)) continue;
+    if (!dbApi.getMission(row.mission_id)) { dropPending(row.id); continue; }
+    let card: Omit<Pending, 'resolve' | 'onPaste'>;
+    try { card = JSON.parse(row.card) as Omit<Pending, 'resolve' | 'onPaste'>; } catch {
+      dropPending(row.id);
+      continue;
+    }
+    const parkedAt = row.parked_at ?? Date.now();
+    if (row.parked_at === null) {
+      try { dbApi.parkPendingCard(row.id, parkedAt); } catch { /* the memory copy is enough to answer it */ }
+    }
+    PENDING.set(row.id, { ...card, id: row.id, timeout_ms: 0, parked_at: parkedAt, resolve: () => { /* set aside */ } });
+    RESTORED_KEYS.set(row.id, row.input_key);
+    restored++;
+  }
+  if (restored > 0) console.log(`[permissions] ${restored} unanswered card(s) restored at startup`);
+  return restored;
+}
+
+/** `input_key` of the cards restored at boot: their input may be masked. */
+const RESTORED_KEYS = new Map<string, string>();
+
+/**
+ * Allows the user gave on set-aside approval cards, keyed by mission, holding
+ * the `inputKey`s granted. The agent calls the tool again (`resumeAfterAnswer`
+ * tells it to); that call, and only that one, passes without a new card.
+ */
+const GRANTED_ONCE = new Map<string, string[]>();
+
+function grantOnce(p: Pending): void {
+  const key = RESTORED_KEYS.get(p.id) ?? inputKey(p.tool_name, p.input);
+  GRANTED_ONCE.set(p.mission_id, [...(GRANTED_ONCE.get(p.mission_id) ?? []), key]);
+}
+
+function takeGrant(missionId: string, toolName: string, input: unknown): boolean {
+  const keys = GRANTED_ONCE.get(missionId);
+  if (!keys) return false;
+  const at = keys.indexOf(inputKey(toolName, input));
+  if (at < 0) return false;
+  keys.splice(at, 1);
+  if (!keys.length) GRANTED_ONCE.delete(missionId);
+  return true;
+}
 
 function recordPermissionSpan(
   missionId: string,
@@ -311,8 +456,12 @@ export function dismissStaleNotifications(missionId: string): void {
  */
 export function dismissOrphanedPermissionNotifications(): number {
   let closed = 0;
+  // A card the store kept is not an orphan: it comes back at boot, whichever
+  // of the two runs first.
+  let kept = new Set<string>();
+  try { kept = new Set(dbApi.listPendingCards().map((c) => c.id)); } catch { /* none known */ }
   for (const n of dbApi.listActiveNotifications('action_required')) {
-    if (!n.anchor || !n.mission_id || PENDING.has(n.anchor)) continue;
+    if (!n.anchor || !n.mission_id || PENDING.has(n.anchor) || kept.has(n.anchor)) continue;
     if (!dbApi.hasPermissionRequest(n.mission_id, n.anchor)) continue;
     if (dbApi.dismissNotification(n.id)) { closed++; closePushFor(n); }
   }
@@ -841,7 +990,9 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
 
   // 2 quater. An unattended mission never asks the human: its question goes to
   //    the agent that spawned it or pilots its series.
-  const questionRefusal = userQuestionRefusal(input);
+  //    With durable cards the question no longer blocks anyone: it is set
+  //    aside after the live wait and its answer resumes the mission.
+  const questionRefusal = durableCards() ? null : userQuestionRefusal(input);
   if (questionRefusal) {
     const decision: PermissionDecision = { behavior: 'deny', message: questionRefusal };
     RESOLVED.set(key, decision);
@@ -854,6 +1005,8 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
   //    replacing the callback, and reuse the existing card/event.
   for (const p of PENDING.values()) {
     if (p.mission_id === input.mission_id && p.tool_use_id === input.tool_use_id) {
+      // Set aside: the answer goes to the mission as a message, not to a call.
+      if (p.parked_at !== undefined) return Promise.resolve({ behavior: 'deny', message: parkedCardMessage(p) });
       return new Promise((resolve) => {
         p.resolve = resolve;
         // The shim came back within the grace delay: the card lives on.
@@ -862,6 +1015,17 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
         watchWaiter(p.id, resolve, input.signal, input.retireAtOnce === true);
       });
     }
+  }
+
+  // 3 a. The user allowed this exact call on a set-aside card, and the
+  //    agent, resumed with that answer, calls it again: it passes, once.
+  if (input.tool_name !== 'ask_user' && takeGrant(input.mission_id, input.tool_name, input.input)) {
+    const decision: PermissionDecision = { behavior: 'allow', updatedInput: input.input };
+    RESOLVED.set(key, decision);
+    dbApi.insertEvent(input.mission_id, 'permission_auto_allowed', {
+      tool_name: input.tool_name, tool_use_id: input.tool_use_id, granted: 'answer_to_set_aside_card',
+    });
+    return Promise.resolve(decision);
   }
 
   // 3 bis. An approval the human already widened to this session, or to every
@@ -916,7 +1080,9 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
   // request event itself, a replay included.
   const m = dbApi.getMission(input.mission_id);
   const autonomous = !!m && isAutonomousMission(m);
-  const timeoutMs = cardTimeoutMs(input.tool_name, autonomous);
+  // A durable card never expires: no countdown, no automatic refusal.
+  const durable = durableCards();
+  const timeoutMs = durable ? 0 : cardTimeoutMs(input.tool_name, autonomous);
 
   const id = randomUUID();
   return new Promise((resolve) => {
@@ -939,6 +1105,7 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
       resolve,
     };
     PENDING.set(id, pending);
+    persistCard(pending);
     watchWaiter(id, resolve, input.signal, input.retireAtOnce === true);
     // Persist the request as an event so a UI reload mid-prompt can replay
     // it and re-render the Allow/Deny card. The matching resolved event is
@@ -1021,7 +1188,12 @@ export function requestPermission(input: RequestInput): Promise<PermissionDecisi
     // Auto-timeout for autonomous missions: no human will click, we unblock
     // the agent after the short delay with an instructive deny. The push
     // fan-out runs in parallel and may still extend this window.
-    if (autonomous && timeoutMs > 0) {
+    if (durable) {
+      // Unref'd: an open card must not keep a process alive on its own.
+      const timer = setTimeout(() => parkPending(id, 'live_wait'), LIVE_WAIT_MS());
+      timer.unref();
+      TIMERS.set(id, timer);
+    } else if (autonomous && timeoutMs > 0) {
       TIMERS.set(id, setTimeout(() => autoTimeoutPending(id), timeoutMs));
     }
   });
@@ -1109,7 +1281,7 @@ function autoTimeoutPending(id: string): void {
   TIMERS.delete(id);
   const p = PENDING.get(id);
   if (!p) return;
-  PENDING.delete(id);
+  dropPending(id);
   // The delay quoted is the one ACTUALLY applied to this request (it may have
   // been extended by adaptTimeoutToPush), not the current setting.
   const msg =
@@ -1156,7 +1328,7 @@ function detachPending(id: string, waiter: (d: PermissionDecision) => void): voi
   DETACH_TIMERS.delete(id);
   const p = PENDING.get(id);
   if (!p || p.resolve !== waiter) return;
-  PENDING.delete(id);
+  dropPending(id);
   clearTimer(id);
   const message = 'the call waiting for this answer was cancelled — permission expired';
   // Settles the abandoned waiter (its route returns without writing) and lets
@@ -1188,9 +1360,10 @@ export function expirePendingForMission(missionId: string): void {
   for (const k of [...RESOLVED.keys()]) {
     if (k.startsWith(`${missionId}::`)) RESOLVED.delete(k);
   }
+  GRANTED_ONCE.delete(missionId);
   for (const [id, p] of [...PENDING]) {
     if (p.mission_id !== missionId) continue;
-    PENDING.delete(id);
+    dropPending(id);
     clearTimer(id);
     try { p.resolve({ behavior: 'deny', message: 'mission ended — permission expired' }); } catch { /* */ }
     const payload = { id, behavior: 'expired' as const, origin: 'mission_end' satisfies DecisionOrigin };
@@ -1202,10 +1375,36 @@ export function expirePendingForMission(missionId: string): void {
   }
 }
 
-/** Hooks card expiry to mission end. Must be registered at boot. */
+/**
+ * The process of a mission exited. Without durable cards its cards expire.
+ * With them, an exit is not the mission's end — an idle reap, a crash, a
+ * restart all leave a conversation the answer can resume: the cards still
+ * waited on live are set aside, and the ones already set aside stay.
+ */
+function onMissionProcessEnd(missionId: string): void {
+  if (!durableCards()) { expirePendingForMission(missionId); return; }
+  for (const k of [...RESOLVED.keys()]) {
+    if (k.startsWith(`${missionId}::`)) RESOLVED.delete(k);
+  }
+  for (const [id, p] of [...PENDING]) {
+    if (p.mission_id === missionId && p.parked_at === undefined) parkPending(id, 'mission_end');
+  }
+}
+
+/**
+ * Hooks card expiry to mission end, and puts back the cards a restart left.
+ * Must be registered at boot. A mission ends with its process when cards are
+ * not durable, and when its task is closed either way: a task done or blocked
+ * answers no question any more.
+ */
 export function startPermissionExpiry(): () => void {
+  restorePendingCards();
   const onBusEvent = (ev: BusEvent) => {
-    if (ev.kind === 'mission_complete') expirePendingForMission(ev.missionId);
+    if (ev.kind === 'mission_complete') onMissionProcessEnd(ev.missionId);
+    if (ev.kind === 'task_done' || ev.kind === 'task_blocked') {
+      const missionId = dbApi.getTask(ev.taskId)?.mission_id;
+      if (missionId && listPending(missionId).length) expirePendingForMission(missionId);
+    }
   };
   bus.on('event', onBusEvent);
   return () => void bus.off('event', onBusEvent);
@@ -1268,7 +1467,7 @@ export function resolvePermission(
   const decision: PermissionDecision = answer.behavior === 'paste'
     ? { behavior: 'deny', message: pasteReply(p.shell_command!) }
     : answer;
-  PENDING.delete(id);
+  dropPending(id);
   clearTimer(id);
   // Claude validates the allow response and requires `updatedInput` to be
   // present — if missing it logs "harness validation error" and retries.
@@ -1349,12 +1548,60 @@ export function resolvePermission(
   //   on its own: DO NOT inject a message (would break the turn's stream).
   // - process dead (mission no longer in memory) → we cannot reinject: we
   //   escalate so the user relaunches the mission.
-  if (final.behavior === 'allow') {
+  // A set-aside card: nobody waits on it, the answer — Allow or Deny — is
+  // what resumes the mission.
+  if (p.parked_at !== undefined) {
+    if (final.behavior === 'allow' && p.tool_name !== 'ask_user') grantOnce(p);
+    RESTORED_KEYS.delete(id);
+    resumeAfterAnswer(p, final).catch((err) =>
+      console.error(`[permissions] resume after answer ${p.mission_id.slice(0, 8)}: ${(err as Error).message}`),
+    );
+  } else if (final.behavior === 'allow') {
     nudgeIfOrphaned(p, final).catch((err) =>
       console.error(`[permissions] re-trigger ${p.mission_id.slice(0, 8)}: ${(err as Error).message}`),
     );
   }
   return true;
+}
+
+/**
+ * The message an answer to a set-aside card brings the agent: it opens its next
+ * turn, so it says what was asked and what the user decided.
+ */
+export function answerMessage(p: Omit<Pending, 'resolve'>, final: PermissionDecision): string {
+  if (p.tool_name === 'ask_user') {
+    if (final.behavior === 'allow') return buildContinuation(p, final);
+    return `[answer to your question] The user closed your question without answering. ${final.message}`;
+  }
+  if (final.behavior === 'allow') {
+    return `[answer to your request] The user allowed \`${p.tool_name}\`. `
+      + 'Call it again now with the same input: this call goes through without a new card. Then resume your work.';
+  }
+  return `[answer to your request] The user did not allow \`${p.tool_name}\`. ${final.message}`;
+}
+
+/**
+ * Hands the answer to a set-aside card to its mission: between two turns to a
+ * live process (`deliverLate` holds it while a turn runs), or by resuming the
+ * conversation when the process is gone. A mission that can be neither — no
+ * session to resume — falls back to telling the user, as a late answer does.
+ */
+async function resumeAfterAnswer(p: Omit<Pending, 'resolve'>, final: PermissionDecision): Promise<void> {
+  const msg = answerMessage(p, final);
+  if (isRunning(p.mission_id)) {
+    deliverLate(p.mission_id, msg);
+    console.log(`[permissions] answer to set-aside ${p.id.slice(0, 8)} handed to mission ${p.mission_id.slice(0, 8)}`);
+    return;
+  }
+  const resumed = await respawnWithResume(p.mission_id, msg).catch((err) => {
+    console.error(`[permissions] resume ${p.mission_id.slice(0, 8)}: ${(err as Error).message}`);
+    return false;
+  });
+  if (resumed) {
+    console.log(`[permissions] mission ${p.mission_id.slice(0, 8)} resumed with the answer to ${p.id.slice(0, 8)}`);
+    return;
+  }
+  notifyNotReplayed(p);
 }
 
 /**
@@ -1450,6 +1697,10 @@ async function nudgeIfOrphaned(p: Omit<Pending, 'resolve'>, final: PermissionDec
     return;
   }
   // No session_id (or resume failed) → last resort: alert the human.
+  notifyNotReplayed(p);
+}
+
+function notifyNotReplayed(p: Omit<Pending, 'resolve'>): void {
   const task = dbApi.getTaskByMission(p.mission_id);
   notifyUser(
     `Late answer could not be replayed: ${p.tool_name}`,

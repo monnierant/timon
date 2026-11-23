@@ -12,6 +12,9 @@ import { removeHomeOnExit } from '../tests/helpers/test-home.js';
 
 const TMP_HOME = mkdtempSync(join(tmpdir(), 'timon-unattended-question-test-'));
 process.env.TIMON_HOME = TMP_HOME;
+// The refusal is the behaviour without durable cards (ADR 0002): with them the
+// question opens, see durable-cards.test.ts.
+process.env.TIMON_PERMISSION_LIVE_WAIT_MS = '0';
 removeHomeOnExit(TMP_HOME);
 
 const { requestPermission, userQuestionRefusal, listPending } = await import('./permissions.js');
