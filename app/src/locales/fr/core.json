@@ -1577,6 +1577,8 @@
     "notOnBoard": "absente du tableau",
     "defaultModel": "défaut {backend}",
     "validationRequired": "Validation requise",
+    "waitingForAnswer": "En attente d'une réponse",
+    "waitingForAnswerHint": "L'agent vous a posé une question et a terminé son tour. Votre réponse reprend la tâche.",
     "openFailed": "Impossible de charger cette task. Réessayez.",
     "filterProject": "Projet",
     "filterAgent": "Agent",

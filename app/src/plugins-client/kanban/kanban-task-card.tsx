@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, GitMerge, Network, Paperclip, Square, SquareArrowOutUpRight } from 'lucide-react';
+import { Clock, GitMerge, MessageCircleQuestion, Network, Paperclip, Square, SquareArrowOutUpRight } from 'lucide-react';
 import { BoardCard } from '@/components/board-card';
 import { ChatLink } from '@/components/chat/chat-link';
 import { RoleBadge } from '@/components/role-badge';
@@ -133,8 +133,19 @@ export function KanbanTaskCard({
   );
 
   const validation = running && needsAction;
-  const context = (validation || t.interrupted_reason || t.blocked_reason) ? (
+  const waitingForAnswer = running && t.awaiting_answer === true && !validation;
+  const context = (validation || waitingForAnswer || t.interrupted_reason || t.blocked_reason) ? (
     <>
+      {waitingForAnswer && (
+        <div
+          data-task-awaiting-answer
+          title={i18n('kanbanPage.waitingForAnswerHint')}
+          className="flex items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-[11px] font-semibold text-warning"
+        >
+          <MessageCircleQuestion className="size-3.5 flex-none" aria-hidden />
+          <span>{i18n('kanbanPage.waitingForAnswer')}</span>
+        </div>
+      )}
       {validation && (
         <div className="flex animate-pulse items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-[11px] font-semibold text-warning">
           <span aria-hidden>⚠</span>

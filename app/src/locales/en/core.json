@@ -1577,6 +1577,8 @@
     "notOnBoard": "not on the board",
     "defaultModel": "{backend} default",
     "validationRequired": "Validation required",
+    "waitingForAnswer": "Waiting for an answer",
+    "waitingForAnswerHint": "The agent asked you something and ended its turn. Your answer resumes the task.",
     "openFailed": "Could not load this task. Try again.",
     "filterProject": "Project",
     "filterAgent": "Agent",

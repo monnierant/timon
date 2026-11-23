@@ -182,3 +182,22 @@ test('a blocked or interrupted task says why in the context zone, and a finished
     await m.unmount();
   }
 });
+
+test('a task waiting for an answer says so, and the validation card wins over it', async () => {
+  const m = await mount();
+  try {
+    await m.render(task({ status: 'IN_PROGRESS', mission_id: 'm-3', started_at: NOW - 60_000, awaiting_answer: true }));
+    assert.match(m.text('context'), /Waiting for an answer/);
+    assert.ok(m.card().querySelector('[data-task-awaiting-answer]'));
+
+    // A card open live asks for validation: that is what the user acts on.
+    await m.render(task({ status: 'IN_PROGRESS', mission_id: 'm-3', started_at: NOW - 60_000, awaiting_answer: true }), { needsAction: true });
+    assert.match(m.text('context'), /Validation required/);
+    assert.equal(m.card().querySelector('[data-task-awaiting-answer]'), null);
+
+    await m.render(task({ status: 'IN_PROGRESS', mission_id: 'm-3', started_at: NOW - 60_000 }));
+    assert.equal(m.card().querySelector('[data-task-awaiting-answer]'), null, 'a task at work does not wait');
+  } finally {
+    await m.unmount();
+  }
+});
