@@ -190,6 +190,19 @@ export const ACP_AGENTS = Object.freeze([
     // `hermes-acp` speaks the protocol as launched.
     args: [],
     permissionsByAgent: false,
+    // Hermes announces `default` (asks before every edit), `accept_edits` (edits inside the session's
+    // folder and the temp folder are not asked about; a sensitive path still is) and `dont_ask`. Only `acceptEdits` leaves
+    // `default`. Every other mode is mapped back to it on purpose: Hermes keeps a session's mode across
+    // `session/resume`, so a mission whose permission mode was lowered since would go on editing unasked.
+    // `dontAsk` is not mapped to `dont_ask`: the two names do not mean the same thing.
+    sessionModes: {
+      plan: 'default',
+      default: 'default',
+      auto: 'default',
+      dontAsk: 'default',
+      bypassPermissions: 'default',
+      acceptEdits: 'accept_edits',
+    },
     modelProbe: 'session-new',
     // `hermes-acp` is the stdio server Timon starts: run by hand it opens nothing and waits, which a
     // tester took for a sign-in stuck on a browser (TIM-0153). The sentence names the command that does sign in.

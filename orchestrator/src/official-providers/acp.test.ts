@@ -34,6 +34,7 @@ const { BUILTIN_DECLARATIONS } = await import('../backends/builtin-declarations.
 const { openLaunchSeal, closeLaunchSeal } = await import('../backends/launch-seal.js');
 
 const { spawnOverrideRefusal } = await import('../users/privileged-overrides.js');
+const { PERMISSION_MODES } = await import('../backends/permission-models.js');
 const { acpInitEvent } = await import('../backends/acp/events.js');
 const { ACP_AGENTS, antigravityKeychainEnv, antigravitySignIn, antigravitySignInCommand } = await import('../../official-providers/provider-acp/lib/agents.js');
 /** The sign-in sentence of THIS platform, as a pattern: on Linux the command switches the keychain off. */
@@ -423,6 +424,60 @@ test('the resume id reaches the session', async () => {
   } finally {
     s.close();
   }
+});
+
+/** What `hermes-acp` answers to `initialize`, and the modes it announces for a session (hermes-agent 0.23.1, read off the real agent). */
+const HERMES_CAPABILITIES = { loadSession: true, sessionCapabilities: { fork: {}, list: {}, resume: {} } };
+const HERMES_MODE_IDS = ['default', 'accept_edits', 'dont_ask'] as const;
+
+/**
+ * Opens a Hermes session for an agent in `permissionMode`, against a scripted agent whose session stands in
+ * `current`: a new session when `resumed` is false, the mission's stored one otherwise. Returns the
+ * `session/set_mode` calls Timon made.
+ */
+async function hermesSetModeCalls(permissionMode: string, current: (typeof HERMES_MODE_IDS)[number], resumed = false): Promise<unknown[]> {
+  const { createAcpReplayPeer } = await import('../../../packages/sdk/src/testing/acp-checks.js');
+  const modes = { currentModeId: current, availableModes: HERMES_MODE_IDS.map((id) => ({ id, name: id })) };
+  const peer = createAcpReplayPeer([
+    { on: 'initialize', reply: { protocolVersion: 1, agentCapabilities: HERMES_CAPABILITIES, authMethods: [] } },
+    { on: 'session/new', reply: { sessionId: 's-1', modes } },
+    { on: 'session/resume', reply: { modes } },
+    { on: 'session/set_mode', reply: {} },
+  ]);
+  const spawn = opts({ resumeSession: resumed ? 's-1' : null }, { permission_mode: permissionMode });
+  const seal = openLaunchSeal(spawn.missionId, 'hermes', spawn, () => 'issued-token');
+  const driver = getBackend('hermes').openSession!({
+    io: peer.io,
+    spawn,
+    host: { emit: () => undefined, requestPermission: async () => ({ allow: false }) },
+  });
+  try {
+    const info = await driver.start();
+    assert.equal(info.resumed, resumed, 'the scripted agent took the way the test meant');
+    return peer.received.filter((m) => m.method === 'session/set_mode').map((m) => m.params);
+  } finally {
+    driver.close();
+    peer.close();
+    closeLaunchSeal(seal);
+  }
+}
+
+test('Hermes: `acceptEdits` selects its Accept Edits mode, and no permission mode selects `dont_ask`', async () => {
+  assert.deepEqual(await hermesSetModeCalls('acceptEdits', 'default'), [{ sessionId: 's-1', modeId: 'accept_edits' }]);
+  for (const mode of PERMISSION_MODES) {
+    if (mode === 'acceptEdits') continue;
+    assert.deepEqual(await hermesSetModeCalls(mode, 'default'), [], `${mode}: the session keeps Hermes' \`default\`, which asks before every edit`);
+  }
+});
+
+test('Hermes: a resumed session left in Accept Edits goes back to Default once the mission is no longer in `acceptEdits`', async () => {
+  // Hermes keeps a session's mode across `session/resume`: without the way back, lowering an agent's mode
+  // would leave its open missions editing unasked.
+  for (const mode of PERMISSION_MODES) {
+    if (mode === 'acceptEdits') continue;
+    assert.deepEqual(await hermesSetModeCalls(mode, 'accept_edits', true), [{ sessionId: 's-1', modeId: 'default' }], mode);
+  }
+  assert.deepEqual(await hermesSetModeCalls('acceptEdits', 'accept_edits', true), [], 'already there: nothing is sent');
 });
 
 /* ── Consequences elsewhere ─────────────────────────────────────────────── */
