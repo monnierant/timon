@@ -174,7 +174,10 @@ export function rowsFor(args: {
   }
   const backend = providersOf(catalog, filter).find((b) => b.id === view.backend);
   if (!backend) return [];
-  const rows = byPower(modelsOf(backend, filter)).map((model) => rowOf(backend, model, value, isFavorite, false));
+  // A model past the menu's cap is the search's, unless it is the value held: it stays in view.
+  const held = (m: CatalogModel) => value?.backend === backend.id && value.model === m.slug;
+  const listed = modelsOf(backend, filter).filter((m) => !m.searchOnly || held(m));
+  const rows = byPower(listed).map((model) => rowOf(backend, model, value, isFavorite, false));
   const orphan = orphanOf(catalog, value);
   if (orphan?.kind === 'custom' && value?.backend === backend.id) {
     rows.unshift({

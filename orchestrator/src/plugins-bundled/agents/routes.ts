@@ -895,7 +895,7 @@ export function registerRoutes(app: express.IRouter): void {
     }
   });
 
-  app.post('/api/agents', (req, res) => {
+  app.post('/api/agents', async (req, res) => {
     if (rejectIfDenied(req, res, 'agents:manage')) return;
     const body = req.body as {
       name?: string;
@@ -920,6 +920,12 @@ export function registerRoutes(app: express.IRouter): void {
     if (body.config && 'icon_url' in body.config && !agentIconUrlSchema.safeParse(body.config.icon_url).success) {
       res.status(400).json(apiError('agent_icon_url_refused', ICON_URL_REFUSAL));
       return;
+    }
+    // A runtime profile the host has (`runtimeProfileProblem`); empty or null is the default.
+    const runtimeProfile = (body.config as Record<string, unknown> | undefined)?.['runtime_profile'];
+    if (typeof runtimeProfile === 'string' ? runtimeProfile !== '' : runtimeProfile !== undefined && runtimeProfile !== null) {
+      const problem = await runtimeProfileProblem(body.config?.backend ?? defaultBackendName(), runtimeProfile);
+      if (problem) { res.status(400).json(apiError('runtime_profile_refused', problem, { detail: problem })); return; }
     }
     try {
       validateCwd(body.config?.cwd);

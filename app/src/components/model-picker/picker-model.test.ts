@@ -147,3 +147,20 @@ test('acceptsPick: the host lets through only what the product picker offers', (
   assert.equal(acceptsPick(CATALOG, { backend: 'codex', model: 'gpt-5.5' }, { ...base, filter: onlyCodex }), true);
   assert.equal(acceptsPick(CATALOG, typed, { ...base, allowCustomSlug: true, filter: onlyCodex }), false);
 });
+
+test('a model past the menu\'s cap stays out of the list and is found by the search, then held as the value', () => {
+  const catalog: BackendCatalog = {
+    defaultBackend: 'hermes',
+    backends: [{
+      id: 'hermes', label: 'Hermes', defaultModel: 'near', runtimeProfile: 'alpha',
+      models: [{ slug: 'near', label: 'near' }, { slug: 'far-away', label: 'far-away', searchOnly: true }],
+    }],
+  };
+  const view = { kind: 'provider' as const, backend: 'hermes' };
+  assert.deepEqual(rowsFor({ catalog, view, query: '', value: null, favorites: [] }).map((r) => r.slug), ['near']);
+  assert.deepEqual(rowsFor({ catalog, view, query: 'far', value: null, favorites: [] }).map((r) => r.slug), ['far-away']);
+  const held = rowsFor({ catalog, view, query: '', value: { backend: 'hermes', model: 'far-away' }, favorites: [] });
+  assert.deepEqual(held.map((r) => [r.slug, r.selected]), [['near', false], ['far-away', true]], 'the value is never out of view');
+  assert.equal(orphanOf(catalog, { backend: 'hermes', model: 'far-away' }), null, 'a model of the list, not a slug typed by hand');
+  assert.equal(acceptsPick(catalog, { backend: 'hermes', model: 'far-away' }, { value: null, inherit: false, allowCustomSlug: false, disabled: false }), true);
+});

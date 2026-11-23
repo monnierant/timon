@@ -165,3 +165,10 @@ test('a stale target nobody reads is forgotten without a request', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('catalogTargetQuery carries the draft runtime profile and its backend, an empty name included', async () => {
+  const { catalogTargetQuery } = await import('./catalog-target');
+  assert.equal(catalogTargetQuery({ agent: 'coder', runtimeProfile: { backend: 'hermes', name: 'alpha' } }), 'agent=coder&runtimeProfile=alpha&runtimeProfileBackend=hermes');
+  assert.equal(catalogTargetQuery({ runtimeProfile: { backend: 'hermes', name: '' } }), 'runtimeProfile=&runtimeProfileBackend=hermes', 'empty: the default, said out loud');
+  assert.equal(catalogTargetQuery({ agent: 'coder', runtimeProfile: null }), 'agent=coder');
+});

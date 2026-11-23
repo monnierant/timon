@@ -16,13 +16,14 @@ type ServedCatalog = { backends: Array<{ id: string; account?: unknown; models: 
 
 /**
  * The runtime profile a catalogue is read for, and on which backend: `?runtimeProfile=` (the
- * agent editor's draft, empty = the default) wins; otherwise the saved profile of `?agent=`,
+ * agent editor's draft, empty = the default, on `?runtimeProfileBackend=`) wins; otherwise the saved profile of `?agent=`,
  * on that agent's backend. Null: read the backends' own lists, as before.
  */
 function wantedRuntimeProfile(req: Request): { name: string; backend: string | null } | null {
   const draft = req.query['runtimeProfile'];
   const agent = req.query['agent'];
-  const backend = typeof req.query['backend'] === 'string' && req.query['backend'] !== '' ? req.query['backend'] : null;
+  const on = req.query['runtimeProfileBackend'];
+  const backend = typeof on === 'string' && on !== '' ? on : null;
   if (typeof draft === 'string') return draft.trim() === '' ? null : { name: draft.trim(), backend };
   if (typeof agent !== 'string' || !isValidAgentName(agent.trim())) return null;
   try {

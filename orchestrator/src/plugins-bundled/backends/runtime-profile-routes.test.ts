@@ -99,6 +99,8 @@ test('an agent without a profile, and the catalogue read for nobody, are as befo
 test('the editor\'s draft profile wins over the saved one; empty reads the default', async () => {
   assert.deepEqual((await acmeOf('?agent=on-alpha&runtimeProfile=beta')).models.map((m) => m.slug), ['beta-model-00', 'beta-model-01']);
   assert.deepEqual((await acmeOf('?agent=on-alpha&runtimeProfile=')).models.map((m) => m.slug), ['root-model-00']);
+  assert.deepEqual((await acmeOf('?runtimeProfile=beta&runtimeProfileBackend=acme-homes')).models.map((m) => m.slug), ['beta-model-00', 'beta-model-01']);
+  assert.deepEqual((await acmeOf('?runtimeProfile=beta&runtimeProfileBackend=claude')).models.map((m) => m.slug), ['root-model-00'], 'a draft for another backend');
 });
 
 test('the config takes a profile the host has, refuses one it has not, and empty clears it', async () => {
@@ -118,4 +120,24 @@ test('the config takes a profile the host has, refuses one it has not, and empty
   res = await patch('plain', { runtime_profile: 'alpha' });
   assert.equal(res.status, 400);
   assert.match(((await res.json()) as { error: string }).error, /has no runtime profiles/);
+});
+
+const upsert = (name: string, config: Record<string, unknown>) => fetch(`${base}/api/agents`, {
+  method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+  body: JSON.stringify({ name, system_prompt: 'You test.', config: { cwd: process.env.TIMON_HOME, ...config } }),
+});
+
+test('the editor\'s save: a profile the host has is kept, an unknown one refused, a save without the field keeps it, null clears it', async () => {
+  let res = await upsert('saved', { backend: 'acme-homes', runtime_profile: 'beta', model: 'beta-model-01' });
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal(stored('saved').runtime_profile, 'beta');
+  res = await upsert('saved', { backend: 'acme-homes', runtime_profile: 'nope' });
+  assert.equal(res.status, 400);
+  assert.equal(stored('saved').runtime_profile, 'beta');
+  res = await upsert('saved', { backend: 'acme-homes', model: 'beta-model-00' });
+  assert.equal(res.status, 200);
+  assert.equal(stored('saved').runtime_profile, 'beta', 'a writer that does not know the field does not erase it');
+  res = await upsert('saved', { backend: 'acme-homes', runtime_profile: null });
+  assert.equal(res.status, 200);
+  assert.equal('runtime_profile' in stored('saved'), false);
 });
