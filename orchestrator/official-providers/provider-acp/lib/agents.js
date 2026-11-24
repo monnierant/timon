@@ -201,7 +201,9 @@ export const ACP_AGENTS = Object.freeze([
       fallback: `run \`hermes setup\` in a terminal on this machine, then retry the mission (${HERMES_ACP_NOTE})`,
     },
     binary: HERMES.binary,
-    declares: { credentialDirs: HERMES.credentialDirs },
+    // From 0.23 `hermes-acp` runs every session's terminal in one gateway per profile, started with the
+    // environment of the first launch: a mission's identity put there would reach the next missions' shells.
+    declares: { credentialDirs: HERMES.credentialDirs, capabilities: { processPerMission: false } },
   },
   {
     // Google Antigravity CLI (`agy`) 1.5.9 verified against the real agent: a stdio MCP server handed in
