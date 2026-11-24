@@ -32,13 +32,22 @@ Timon does not pick a model for Hermes: the default is Hermes' own. The model pi
 
 Hermes can keep several profiles on one machine (`hermes profile create work`), each with its own configuration, model providers, keys, skills and sessions. A Timon agent can run on one of them: in the agent editor, the **LLM** tab of a Hermes agent has a **Hermes profile** field that lists the profiles of the machine that runs Timon. Leave it empty to run on Hermes' default profile, as before.
 
-- The agent's missions start Hermes on that profile, the same way `hermes --profile <name>` does. Timon reads the profile names and never writes into a profile: create, edit and delete profiles with Hermes.
+- The agent's missions start Hermes on that profile, the same way `hermes --profile <name>` does. Timon reads the profile names and writes nothing into a profile, except the `timon` skill below when you turn it on: create, edit and delete profiles with Hermes.
 - The model picker of that agent shows the models that profile offers, asked from Hermes on that profile and kept apart from the default profile's list. The list stops at 60 models; when a profile offers more, the picker's search still finds the others, and you can save any of them. Without a model, the agent runs on the profile's own default model.
 - Several agents can share a profile, and two agents on two profiles each see their own list.
 - Changing an agent's profile, back to the default included, needs the same permission as changing its backend: an administrator, or a user granted the agent's privileged settings. The name must be one of the profiles Hermes lists on the machine.
 - A profile that has been deleted since stays on the agent, marked as missing: its missions do not start until you pick another profile or the default.
 
 Timon finds the profiles where Hermes keeps them: under `~/.hermes/profiles` (`%LOCALAPPDATA%\hermes\profiles` on Windows), or under the `HERMES_HOME` the service runs with. A [Hermes Gateway](./hermes-gateway.md) backend has no profile field: the gateway runs on the profile it was started with.
+
+## The `timon` skill
+
+Turn on **Install the timon skill in agents' program homes** (`TIMON_RUNTIME_PROFILE_SKILL`, in **Settings**, off by default) and Timon writes a `timon` skill into the Hermes home each Hermes agent runs on: `skills/timon/` of the agent's profile, or of Hermes' default home when the agent names no profile. Hermes then lists it and loads it by name (`skill_view`), in a Timon mission and in any other session of that home.
+
+- The skill tells the agent how to tell a Timon mission from another session, which Timon tools to use, and how Hermes names them: `mcp__editor_timon_<8 hex>__<tool>`, a name that changes with each session, often to be found with `tool_search` first. It names no full tool name.
+- It does not send the agent to the `timon` command line. Hermes 0.23 runs the terminal of every session in one shared process, which keeps the environment of the mission that started it: a later mission's terminal holds the first mission's `TIMON_*` variables and token.
+- Timon writes it at the start of a mission, rewrites it when Timon is updated, and leaves it alone otherwise. A copy you edited, or a `timon` skill Timon did not write, stays as it is; delete the `skills/timon` folder to get Timon's copy back.
+- Turning the setting off stops the writes; a skill already written stays until you delete it.
 
 ## What agents can do
 
