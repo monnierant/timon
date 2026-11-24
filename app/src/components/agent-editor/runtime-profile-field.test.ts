@@ -57,7 +57,7 @@ test('the field: hidden without profiles, a select of the names otherwise, the p
     await React.act(async () => {
       root.render(React.createElement(RuntimeProfileSelect, { offered: null, value: '', onChange: () => {} }));
     });
-    assert.equal(document.querySelector('select[data-runtime-profile]'), null);
+    assert.ok(!document.querySelector('select[data-runtime-profile]'));
   } finally {
     await React.act(async () => { root.unmount(); });
     for (const [key, descriptor] of saved) {
