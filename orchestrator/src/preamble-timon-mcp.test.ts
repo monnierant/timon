@@ -34,6 +34,13 @@ const noTools: Dialect = {
 };
 registerDialect(OWNER, 'preamble-no-tools', noTools);
 registerDialect(OWNER, 'preamble-own-identity', { ...noTools, capabilities: { ...noTools.capabilities, timonPreamble: false } });
+registerDialect(OWNER, 'preamble-shared-process', {
+  ...noTools, capabilities: { ...noTools.capabilities, timonMcp: true, processPerMission: false },
+});
+registerProfile(OWNER, {
+  id: 'preamble-shared-process', dialect: 'preamble-shared-process', label: 'Shared process', custom: true,
+  defaultModel: null, models: [],
+});
 registerProfile(OWNER, {
   id: 'preamble-own-identity', dialect: 'preamble-own-identity', label: 'Own identity', custom: true,
   defaultModel: null, models: [],
@@ -108,4 +115,15 @@ test('TODO #551: ui_render is promised only while the ui-documents module runs',
     setActiveModules(['@timon/ui-documents']);
     assert.match(preambleFor('claude'), /ui_render/);
   } finally { resetActiveModules(); }
+});
+
+test('a shell several missions share is sent to the MCP tools, never to the timon CLI', () => {
+  const shared = preambleFor('preamble-shared-process');
+  assert.doesNotMatch(shared, /timon notify|timon memory rule/, 'the CLI there has no mission to act as');
+  assert.match(shared, /The `notify` tool/);
+  assert.match(shared, /`memory_rule_add` tool/);
+  assert.match(shared, /kanban_add/, 'the MCP tools stay');
+  const own = preambleFor('claude');
+  assert.match(own, /timon notify report\|alert/, 'a process per mission keeps the CLI gestures');
+  assert.match(own, /timon memory rule add/);
 });

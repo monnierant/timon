@@ -86,8 +86,9 @@ export type PermissionModel = 'mcp-bridge' | 'sandbox' | 'protocol' | 'none';
  *  orchestrator side (`backends/types.ts`): `worktree` = it works in Timon's
  *  folder, `timonMcp` = Timon's tools can be handed to it, `attachments` =
  *  files other than images can be joined to a turn. The daemon also declares
- *  `timonPreamble` (what its system prompt starts with): not a limit a user
- *  can act on, so it is not mirrored. */
+ *  `timonPreamble` (what its system prompt starts with) and `processPerMission`
+ *  (whether the agent's shell belongs to one mission): not limits a user can
+ *  act on, so they are not mirrored. */
 export type BackendCapabilities = { worktree: boolean; timonMcp: boolean; attachments: boolean };
 /** Subjects a provider may mark as not checked on the real program (daemon: `UNVERIFIED_SUBJECTS`). */
 export type UnverifiedSubject =

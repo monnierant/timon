@@ -193,6 +193,13 @@ export function missionEnv(opts: {
    * provider plugin) hands the same value here instead of asking for a second one.
    */
   token?: string;
+  /**
+   * The process outlives this mission and runs the commands of the next ones
+   * (`BackendCapabilities.processPerMission` false): it gets nothing that
+   * identifies this mission or acts as it (`sharedProcessEnv`). The caller
+   * issues the token for the MCP servers itself.
+   */
+  sharedProcess?: boolean;
 }): NodeJS.ProcessEnv {
   const project = opts.project ?? projectFromCwd(opts.cwd) ?? '';
   if (opts.untrusted) return untrustedMissionEnv(opts, project);
@@ -201,8 +208,9 @@ export function missionEnv(opts: {
   const base = inheritEnvEnabled()
     ? { ...process.env }
     : { ...systemEnv(), ...(opts.secretsEnv ?? secretsEnvFor({ agent: opts.agentName, project: project || null })) };
-  const token = opts.token ?? missionApiToken(opts.missionId);
   const inherited = { ...base, ...(opts.specEnv ?? {}) };
+  if (opts.sharedProcess) return sharedProcessEnv(inherited, opts.agentName);
+  const token = opts.token ?? missionApiToken(opts.missionId);
   return {
     ...inherited,
     ...missionEgressEnv(opts.missionId, inherited),
@@ -245,7 +253,7 @@ export function missionIdentityEnv(
 }
 
 function untrustedMissionEnv(
-  opts: { missionId: string; agentName: string; specEnv?: NodeJS.ProcessEnv },
+  opts: { missionId: string; agentName: string; specEnv?: NodeJS.ProcessEnv; sharedProcess?: boolean },
   project: string,
 ): NodeJS.ProcessEnv {
   // A plugin's own spec may not name the credential, whatever its case on Windows.
@@ -253,8 +261,36 @@ function untrustedMissionEnv(
     Object.entries(opts.specEnv ?? {}).filter(([key]) => key.toUpperCase() !== 'TIMON_API_TOKEN'),
   );
   const inherited = { ...systemEnv(), ...spec };
+  if (opts.sharedProcess) return sharedProcessEnv(inherited, opts.agentName);
   // Its own egress credential, not the mission's token: it opens the proxy and no route.
   return { ...inherited, ...missionEgressEnv(opts.missionId, inherited), ...missionIdentityEnv(opts, project) };
+}
+
+/** What `missionIdentityEnv` and the launch put that belongs to ONE mission. */
+const PER_MISSION_ENV = [
+  'TIMON_API_TOKEN', 'TIMON_MISSION_ID', 'TIMON_TRACE_ID', 'TIMON_WORKFLOW_RUN_ID', 'TIMON_WORKFLOW_NODE_ID', 'TIMON_PROJECT',
+] as const;
+
+/**
+ * The environment of a launch whose process runs the commands of every mission
+ * of its agent (`BackendCapabilities.processPerMission` false): Hermes 0.23
+ * starts one gateway per profile with the environment of the first `hermes-acp`
+ * and runs every later session's terminal in it. A mission id, a token or an
+ * egress credential put here would be read, and used, by the next missions.
+ *
+ * So: no mission identity, no token, no egress proxy (its credential names the
+ * mission; the proxy only journals, so these connections go unjournaled rather
+ * than blocked), whatever the spec or the daemon's environment carried. The agent's
+ * name and the daemon's address stay: they are the same for every mission of
+ * this process. `TIMON_SHARED_PROCESS=1` tells the `timon` CLI it has no
+ * mission to act as, so it refuses the daemon-token rather than fall back to the
+ * operator's rights. Timon's MCP servers are not concerned: they get the
+ * mission's identity and token per session (`provider-mcp.ts`).
+ */
+export function sharedProcessEnv(inherited: NodeJS.ProcessEnv, agentName: string): NodeJS.ProcessEnv {
+  const dropped = new Set<string>(PER_MISSION_ENV);
+  const kept = Object.fromEntries(Object.entries(inherited).filter(([key]) => !dropped.has(key.toUpperCase())));
+  return { ...kept, TIMON_AGENT: agentName, TIMON_API: apiBaseUrl(), TIMON_SHARED_PROCESS: '1' };
 }
 
 
@@ -724,6 +760,10 @@ type PreambleContext = {
    *  false, the tools the preamble names (`timon`, `timon_ask`) do not exist for
    *  this agent: promising them would make it call tools it does not have. */
   timonMcp: boolean;
+  /** The agent's shell belongs to this mission (`capabilities.processPerMission`).
+   *  When false the `timon` CLI there has no mission to act as and refuses: the
+   *  sections that name a CLI gesture name the MCP tool alone. */
+  cli: boolean;
 };
 
 /** How an agent talks to the others and starts work: MCP tools of `timon`. */
@@ -820,11 +860,13 @@ function commandsBullet(): string {
 }
 
 /** Notifications and the table of Timon's MCP tools. */
-function timonOfficialTools(): string {
+function timonOfficialTools(cli: boolean): string {
+  const notify = cli
+    ? '`timon notify report|alert "<text>" [--urgent] [--task-id <id>]` posts to the notification\ncenter.'
+    : 'The `notify` tool (`type` `report` or `alert`, `title`, `body`, `urgent`, `task_id`) posts to the\nnotification center.';
   return `## Notifying the user
 
-\`timon notify report|alert "<text>" [--urgent] [--task-id <id>]\` posts to the notification
-center. Send a \`report\` after a completed task whose result deserves to be seen, an
+${notify} Send a \`report\` after a completed task whose result deserves to be seen, an
 \`alert --urgent\` when you are blocked and \`question\` does not fit. One short report beats three.
 
 ## Official Timon tools (MCP \`timon\` and \`timon_ask\`)
@@ -903,7 +945,7 @@ ${ctx.timonMcp ? timonBrowserBullet() : timonBrowserBulletBare()}${ctx.timonMcp 
   attached to its output and freezes. That is ops: give the user the command, check whether it
   runs (process listing), bound a one-off with a timeout, use one-shot requests to check a service.
 ${ctx.pilot && ctx.timonMcp ? pilotSection() : ''}
-${ctx.timonMcp ? timonOfficialTools() : ''}`;
+${ctx.timonMcp ? timonOfficialTools(ctx.cli) : ''}`;
 }
 
 /** Only for an agent that can hand work to others. */
@@ -966,15 +1008,21 @@ function grepaiSection(): string {
  * follow a "canonical" instruction that returns 404, and let it believe it has
  * memorised something.
  */
-function preambleMemory(): string {
-  return `## Timon memory
-
-Use Timon's memory, not the memory files of the CLI that runs you (they belong to an outer
-session). To note a pitfall, decision or preference: \`timon memory rule add "<one actionable
+function preambleMemory(cli: boolean): string {
+  const gestures = cli
+    ? `\`timon memory rule add "<one actionable
 sentence>"\` (or the \`memory_rule_add\` tool) — live at once, no rebuild. It targets you by default
 (\`--scope agent --kind pitfall\`); widen with \`--scope project [--project SLUG]\`, \`--scope role --role
 coder\` or \`--scope global\`; \`--tier core\` injects it every time on its scope. Read or remove:
-\`timon memory rule list\` / \`rm <id>\`. Raw facts go to
+\`timon memory rule list\` / \`rm <id>\`.`
+    : `the \`memory_rule_add\` tool (one actionable
+sentence) — live at once, no rebuild. It targets you by default (\`scope\` \`agent\`, \`kind\` \`pitfall\`);
+widen with \`scope\` \`project\`, \`role\` or \`global\`; \`tier\` \`core\` injects it every time on its scope.
+Read or remove: \`memory_rule_list\` / \`memory_rule_rm\`.`;
+  return `## Timon memory
+
+Use Timon's memory, not the memory files of the CLI that runs you (they belong to an outer
+session). To note a pitfall, decision or preference: ${gestures} Raw facts go to
 \`${timonPath('agents', '<your-name>', 'memory', 'learnings.jsonl')}\` (one JSON line
 \`{"kind":"decision|pitfall|preference","text":"…"}\`). **Memory \`.md\` files inject NOTHING** (\`pieges.md\`
 is dead; a project's \`memory/instructions.md\` / \`decisions.md\` are references to \`Read\`): a rule that
@@ -1046,7 +1094,7 @@ function timonPreamble(memoryOn: boolean, ctx: PreambleContext): string {
   // Memory rules are written with `memory_rule_add` / the `timon` CLI: an agent
   // without Timon's MCP servers has no gesture to follow.
   return timonPreambleHead(ctx)
-    + (memoryOn && ctx.timonMcp ? preambleMemory() : '')
+    + (memoryOn && ctx.timonMcp ? preambleMemory(ctx.cli) : '')
     + timonPreambleTail(ctx);
 }
 
@@ -1452,6 +1500,7 @@ export function buildPromptSegments(
       pilot: cfg.orchestrator === true || cfg.role === 'orchestrator'
         || (Array.isArray(cfg.orchestrates) ? cfg.orchestrates.length > 0 : cfg.orchestrates === '*'),
       timonMcp: backendCapabilities(backend.name).timonMcp,
+      cli: backendCapabilities(backend.name).processPerMission,
     }));
     push('backend', backendContextBlock(backend, model));
   }
@@ -1966,6 +2015,7 @@ async function spawnMissionProcess(
   confirmSpawn: boolean,
 ): Promise<MissionLaunch> {
   const untrusted = trust === 'third-party';
+  const sharedProcess = !backendCapabilities(backend.name).processPerMission;
   const spec: SpawnResult = await buildSealedSpawn(backend, spawnOpts, seal);
 
   // child_process.spawn (not node-pty): the CLI must not detect a TTY on
@@ -2035,9 +2085,10 @@ async function spawnMissionProcess(
     project,
     secretsEnv: vault?.env,
     untrusted,
+    sharedProcess,
     // One token per launch: an official plugin's references resolve to the one the
     // process gets, so neither is revoked by the other.
-    ...(seal && !untrusted ? { token: seal.token() } : {}),
+    ...(seal && !untrusted && !sharedProcess ? { token: seal.token() } : {}),
   }), {
     platform: host.platform,
     binary: backendBin,
@@ -2064,7 +2115,8 @@ async function spawnMissionProcess(
     if (launch.fence.packageCacheDir) Object.assign(procEnv, packageCacheEnv(launch.fence.packageCacheDir));
   }
   // Issued once: a second call would revoke the row the first one handed out.
-  const missionToken = seal ? seal.token() : procEnv.TIMON_API_TOKEN ?? '';
+  // A shared process was given none: the MCP servers still need the mission's own.
+  const missionToken = seal ? seal.token() : sharedProcess && !untrusted ? missionApiToken(missionId) : procEnv.TIMON_API_TOKEN ?? '';
   // Nothing awaited since: a third party's program is still the file checked for this launch.
   assertSpawnPinned(spec);
   const proc = host.spawn(launch.cmd, launch.args, {

@@ -74,21 +74,21 @@ test('the product backends keep every capability: nothing changes for claude and
     assert.deepEqual(backendCapabilities(id), DEFAULT_BACKEND_CAPABILITIES, id);
     const entry = backendCatalog().find((b) => b.id === id);
     assert.ok(entry, `${id} is in the catalogue`);
-    assert.deepEqual(entry.capabilities, { worktree: true, timonMcp: true, attachments: true, timonPreamble: true }, id);
+    assert.deepEqual(entry.capabilities, { worktree: true, timonMcp: true, attachments: true, timonPreamble: true, processPerMission: true }, id);
   }
 });
 
 test('the catalogue carries what a backend declared it cannot do', () => {
   const entry = backendCatalog().find((b) => b.id === 'remote-llm');
   assert.ok(entry);
-  assert.deepEqual(entry.capabilities, { worktree: false, timonMcp: false, attachments: false, timonPreamble: false });
+  assert.deepEqual(entry.capabilities, { worktree: false, timonMcp: false, attachments: false, timonPreamble: false, processPerMission: true });
   assert.deepEqual(backendCapabilities('remote-llm'), entry.capabilities);
 });
 
 test('a profile narrows its dialect and can never widen it', () => {
   assert.deepEqual(
     resolveCapabilities({ capabilities: { worktree: false } }, { capabilities: { worktree: true, attachments: false } }),
-    { worktree: false, timonMcp: true, attachments: false, timonPreamble: true },
+    { worktree: false, timonMcp: true, attachments: false, timonPreamble: true, processPerMission: true },
   );
   assert.deepEqual(resolveCapabilities(undefined, undefined), DEFAULT_BACKEND_CAPABILITIES);
   assert.deepEqual(backendCapabilities('nobody-registered-this'), DEFAULT_BACKEND_CAPABILITIES);

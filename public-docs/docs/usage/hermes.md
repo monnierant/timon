@@ -55,6 +55,8 @@ Hermes **asks before it uses a tool**. The request appears as an **Allow / Deny*
 
 Replies stream into the chat, tool calls appear with their results, and Hermes' reasoning — which can be long — shows as a single collapsed **Reasoning** block. **Stop** in a chat ends the current turn and keeps the conversation. After a restart, the mission reopens its Hermes session without replaying the old messages. Timon's own tools (Kanban, questions, missions, memory) and the stdio MCP servers configured for the agent reach Hermes.
 
+The commands a Hermes agent runs in its terminal carry no mission identity: Hermes runs the terminal of all its sessions in one background process, which outlives the mission that started it, so what identified that mission would reach the next ones. The `timon` command there refuses to act and points to Timon's tools, which a Hermes agent uses instead; it never falls back to your own access. The agent's connections are not listed per mission in [Network activity](network-activity.md) either.
+
 **Compacting a conversation** and its summary when you switch it to another model run on the agent's own model, as does Dreaming for a Hermes agent: Timon starts Hermes for a short session with none of Timon's tools, then stops it. Each run leaves one session in Hermes' own history. Tool requests Hermes makes during it are refused. Conversation titles are not generated with Hermes: Timon uses another of your backends, or keeps the first message as the title.
 
 ## Limitations
