@@ -68,7 +68,8 @@ export function registerRuntimeProfileRoutes(app: Router): void {
       }
       res.json(offered);
     } catch (err) {
-      res.status(500).json(apiError('runtime_profiles_failed', (err as Error).message));
+      const detail = (err as Error).message;
+      res.status(500).json(apiError('runtime_profiles_failed', detail, { detail }));
     }
   });
 }
