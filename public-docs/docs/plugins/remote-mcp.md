@@ -46,6 +46,8 @@ The endpoint listens where Timon's daemon listens, which is the local machine on
 
 The web app's own address does not serve this endpoint: point the remote agent at the daemon.
 
+The **Hermes Gateway** plugin uses this endpoint: when a connection gives a Timon address, each answer of a remote Hermes agent receives a token for a few tools (see [Hermes Gateway](../usage/hermes-gateway.md#timons-tools-on-a-remote-gateway)).
+
 ## Protocol notes
 
 - `POST` only, `application/json` in and out, no session id; `GET` and `DELETE` answer `405`.
