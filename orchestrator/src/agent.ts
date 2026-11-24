@@ -23,7 +23,7 @@ import {
 } from './paths.js';
 import { appendDatedLog } from './log-file.js';
 import { createNotification } from './notifications.js';
-import { db, dbApi, type RenamedAgentTrigger, type Source, type MemoryRuleRow } from './db.js';
+import { db, dbApi, type RenamedAgentTrigger, type Source, type MemoryRuleRow, type MissionRow } from './db.js';
 import { originFromSpawnSource, type UserEventOrigin } from './user-origin.js';
 import type { PromptPresentation } from './prompt-presentation.js';
 import { recordRequestDelivery } from './agent-request-replies.js';
@@ -66,7 +66,8 @@ import {
 } from './backends/index.js';
 import { ROLE_REGISTRY, getRole, withCurrentCloseFlags, type AgentRoleId } from './agent-roles.js';
 import type { InterruptionReason } from './interruption.js';
-import { assertUsableCwd, CwdUnusableError } from './cwd-check.js';
+import { assertUsableCwd, checkCwd, CwdUnusableError } from './cwd-check.js';
+import { configProject, projectFolderFallback, useProjectFolder } from './project-folder.js';
 import { catalogKeeping, mascotPartCatalog, parseAgentAvatar, parseAgentLook, readAgentAvatar, readAgentLook, type AgentAvatarMode, type AgentLook } from './agent-look.js';
 import { bestRateLimit } from './rate-limit.js';
 import {
@@ -1083,7 +1084,7 @@ export function collectMemoryInjection(agentName: string, cfg: AgentConfig, miss
   // rules for a module the user switched off.
   if (!moduleActive(MEMORY_MODULE_ID)) return empty;
   if (!settingBool('TIMON_MEMORY_INJECTION_ENABLED')) return empty;
-  const slug = cfg.project ?? projectFromCwd(cfg.cwd);
+  const slug = configProject(cfg);
   const role = cfg.role ?? null; // agent's trade → cross-cutting role rules
   // Cross-project digest: gated on the FLAG (not on project==null) → works
   // for _main AND every project-less specialist agent. Placed first
@@ -1234,7 +1235,7 @@ export function parseExtraSkills(json: string | null | undefined): string[] {
 export function resolveSpawnSkills(agentName: string, cfg: AgentConfig, forcedSkills: string[] = [], draft?: AgentSkillsDraft): ResolvedSkill[] {
   return resolveAgentSkills({
     agent: agentName,
-    project: cfg.project ?? projectFromCwd(cfg.cwd),
+    project: configProject(cfg),
     role: cfg.role ?? null,
     draft,
   }, forcedSkills);
@@ -1939,7 +1940,7 @@ async function launchMissionProcess(
   // Before `buildSpawn`: a provider may move the account's keychain entry there, which only
   // a fenced launch needs (`mission-fence-state.ts`). Released however the launch ends.
   const account = splitBackendInstance(backend.name).accountId;
-  const project = cfg.project ?? projectFromCwd(cfg.cwd) ?? undefined;
+  const project = configProject(cfg) ?? undefined;
   const fenced = account !== null && missionFenceExpected({ agent: agentName, ...(project ? { project } : {}) });
   const prepared = prepareMissionLaunch(missionId, { account, fenced });
   try {
@@ -1995,7 +1996,7 @@ async function spawnMissionProcess(
   // a deny list must never swallow. Inert on the current scope launcher —
   // `host/isolation.ts` says why, at length.
   const backendBin = resolveBackendBin(host, spec.cmd);
-  const project = cfg.project ?? projectFromCwd(cwd) ?? '';
+  const project = configProject(cfg, cwd) ?? '';
   // The fence (`resources.ts`) is the innermost wrapper: what it needs beyond
   // the working directory is the mission's identity, from which it reopens
   // the mission's own folders of the Timon home and nothing else. A CLI whose
@@ -2030,7 +2031,8 @@ async function spawnMissionProcess(
     agentName,
     specEnv: spec.env,
     cwd,
-    project: cfg.project,
+    // The scope computed above: `missionEnv` would read it off `cwd` again.
+    project,
     secretsEnv: vault?.env,
     untrusted,
     // One token per launch: an official plugin's references resolve to the one the
@@ -2214,6 +2216,20 @@ async function spawnTurn(args: {
       dbApi.setMissionLlmOverrides(missionId, launch.backend, missionRow.model_override ?? null);
       cfg.backend = launch.backend as AgentConfig['backend'];
     }
+  }
+  // PROJECT FOLDER. A mission with no folder of its own (a task's worktree)
+  // whose agent has none either opens in its project's folder: the task's
+  // project, else the agent's. Without it the CLI started in the daemon's own
+  // working directory. The folder moves the mission only: `configProject`
+  // keeps its project scope what it was. A remote backend runs nowhere near
+  // this disk.
+  if (!cfg.cwd && missionRow && !isRemoteBackend(cfg.backend)) {
+    const fallback = projectFolderFallback(
+      { taskProject: projectOfTask(taskIdOfMission(missionRow)), agentProject: cfg.project },
+      (slug) => dbApi.getProjectRow(slug)?.cwd,
+      (path) => checkCwd(path).ok,
+    );
+    if (fallback) useProjectFolder(cfg, fallback.folder);
   }
   // WORKING DIRECTORY (TIM-0148). Checked before the quota guard and anything
   // else that depends on the backend: a folder that is gone fails every backend
@@ -4159,6 +4175,17 @@ function isRemoteBackend(name: BackendName | undefined | null): boolean {
     return !!getBackend(name).openRemoteSession;
   } catch {
     return false;
+  }
+}
+
+/** The task a mission runs: on its row once the dispatcher linked it, in its source until then. */
+function taskIdOfMission(row: Pick<MissionRow, 'task_id' | 'source_channel' | 'source_meta'>): string | null {
+  if (row.task_id) return row.task_id;
+  if (!row.source_meta) return null;
+  try {
+    return taskIdOfSource({ channel: row.source_channel ?? '', meta: JSON.parse(row.source_meta) as unknown });
+  } catch {
+    return null; // a source that is not JSON names no task
   }
 }
 
