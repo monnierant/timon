@@ -760,6 +760,10 @@ type PreambleContext = {
    *  false, the tools the preamble names (`timon`, `timon_ask`) do not exist for
    *  this agent: promising them would make it call tools it does not have. */
   timonMcp: boolean;
+  /** The agent's shell belongs to this mission (`capabilities.processPerMission`).
+   *  When false the `timon` CLI there has no mission to act as and refuses: the
+   *  sections that name a CLI gesture name the MCP tool alone. */
+  cli: boolean;
 };
 
 /** How an agent talks to the others and starts work: MCP tools of `timon`. */
@@ -856,11 +860,13 @@ function commandsBullet(): string {
 }
 
 /** Notifications and the table of Timon's MCP tools. */
-function timonOfficialTools(): string {
+function timonOfficialTools(cli: boolean): string {
+  const notify = cli
+    ? '`timon notify report|alert "<text>" [--urgent] [--task-id <id>]` posts to the notification\ncenter.'
+    : 'The `notify` tool (`type` `report` or `alert`, `title`, `body`, `urgent`, `task_id`) posts to the\nnotification center.';
   return `## Notifying the user
 
-\`timon notify report|alert "<text>" [--urgent] [--task-id <id>]\` posts to the notification
-center. Send a \`report\` after a completed task whose result deserves to be seen, an
+${notify} Send a \`report\` after a completed task whose result deserves to be seen, an
 \`alert --urgent\` when you are blocked and \`question\` does not fit. One short report beats three.
 
 ## Official Timon tools (MCP \`timon\` and \`timon_ask\`)
@@ -939,7 +945,7 @@ ${ctx.timonMcp ? timonBrowserBullet() : timonBrowserBulletBare()}${ctx.timonMcp 
   attached to its output and freezes. That is ops: give the user the command, check whether it
   runs (process listing), bound a one-off with a timeout, use one-shot requests to check a service.
 ${ctx.pilot && ctx.timonMcp ? pilotSection() : ''}
-${ctx.timonMcp ? timonOfficialTools() : ''}`;
+${ctx.timonMcp ? timonOfficialTools(ctx.cli) : ''}`;
 }
 
 /** Only for an agent that can hand work to others. */
@@ -1008,15 +1014,21 @@ function grepaiSection(): string {
  * follow a "canonical" instruction that returns 404, and let it believe it has
  * memorised something.
  */
-function preambleMemory(): string {
-  return `## Timon memory
-
-Use Timon's memory, not the memory files of the CLI that runs you (they belong to an outer
-session). To note a pitfall, decision or preference: \`timon memory rule add "<one actionable
+function preambleMemory(cli: boolean): string {
+  const gestures = cli
+    ? `\`timon memory rule add "<one actionable
 sentence>"\` (or the \`memory_rule_add\` tool) — live at once, no rebuild. It targets you by default
 (\`--scope agent --kind pitfall\`); widen with \`--scope project [--project SLUG]\`, \`--scope role --role
 coder\` or \`--scope global\`; \`--tier core\` injects it every time on its scope. Read or remove:
-\`timon memory rule list\` / \`rm <id>\`. Raw facts go to
+\`timon memory rule list\` / \`rm <id>\`.`
+    : `the \`memory_rule_add\` tool (one actionable
+sentence) — live at once, no rebuild. It targets you by default (\`scope\` \`agent\`, \`kind\` \`pitfall\`);
+widen with \`scope\` \`project\`, \`role\` or \`global\`; \`tier\` \`core\` injects it every time on its scope.
+Read or remove: \`memory_rule_list\` / \`memory_rule_rm\`.`;
+  return `## Timon memory
+
+Use Timon's memory, not the memory files of the CLI that runs you (they belong to an outer
+session). To note a pitfall, decision or preference: ${gestures} Raw facts go to
 \`${timonPath('agents', '<your-name>', 'memory', 'learnings.jsonl')}\` (one JSON line
 \`{"kind":"decision|pitfall|preference","text":"…"}\`). **Memory \`.md\` files inject NOTHING** (\`pieges.md\`
 is dead; a project's \`memory/instructions.md\` / \`decisions.md\` are references to \`Read\`): a rule that
@@ -1088,7 +1100,7 @@ function timonPreamble(memoryOn: boolean, ctx: PreambleContext): string {
   // Memory rules are written with `memory_rule_add` / the `timon` CLI: an agent
   // without Timon's MCP servers has no gesture to follow.
   return timonPreambleHead(ctx)
-    + (memoryOn && ctx.timonMcp ? preambleMemory() : '')
+    + (memoryOn && ctx.timonMcp ? preambleMemory(ctx.cli) : '')
     + timonPreambleTail(ctx);
 }
 
@@ -1494,6 +1506,7 @@ export function buildPromptSegments(
       pilot: cfg.orchestrator === true || cfg.role === 'orchestrator'
         || (Array.isArray(cfg.orchestrates) ? cfg.orchestrates.length > 0 : cfg.orchestrates === '*'),
       timonMcp: backendCapabilities(backend.name).timonMcp,
+      cli: backendCapabilities(backend.name).processPerMission,
     }));
     push('backend', backendContextBlock(backend, model));
   }
