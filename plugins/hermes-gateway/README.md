@@ -2,9 +2,9 @@
 
 Makes the Hermes agents of a user's own **Hermes gateway** (its API server,
 Hermes 0.21.0 or later) answer in Timon like any other agent: chat, missions,
-Kanban tasks other than `code` (the agent has no Timon tools, so the daemon
-auto-closes such a task once its mission goes idle). The gateway may run on
-another machine.
+Kanban tasks other than `code` (unless its connection turns on the remote
+tools below, the agent has no Timon tools, so the daemon auto-closes such a
+task once its mission goes idle). The gateway may run on another machine.
 
 This package is standalone: it uses only the public plugin SDK (`apiVersion`
 7) and imports nothing from Timon's daemon or app. It is not preinstalled.
@@ -23,10 +23,11 @@ User documentation: `public-docs/docs/usage/hermes-gateway.md`.
 | Piece | API | Permission |
 |---|---|---|
 | Remote dialect `hermes-gateway` and its profile (model `hermes/<profile>` or `hermes/<connectionId>/<profile>`) | `ctx.backends.registerDialect` / `registerProfile` (`transport: 'remote'`, `capabilities`) | `backends:register` |
-| Connection type `hermes-gateway:gateway@1` (URL, optional profile, `apiKey` in the vault) with its Test | `ctx.connections.registerType` | `connections:register` |
+| Connection type `hermes-gateway:gateway@1` (URL, optional profile, optional Timon address, `apiKey` in the vault) with its Test | `ctx.connections.registerType` | `connections:register` |
 | The connection and key of the account that launches the mission | `ctx.connections.forUser` / `userSecret` | `connections:users:read` |
 | Calls to the approved gateway, through the daemon's SSRF guard | `ctx.fetch` | `http:outbound` |
 | « Add my Hermes agents to Timon »: one Timon agent per connected profile, or per connection when several gateways serve it (nothing is created on the gateway) | `ctx.agents` | `agents:manage` |
+| A remote MCP token per turn, when the connection gives a Timon address | `ctx.mcp.issueToken` / `revokeToken` | `mcp:issue` |
 | Settings category with the gateways' state | slot `settings.section` | — |
 
 ## Which gateway a mission reaches
@@ -83,6 +84,35 @@ from Hermes 0.21.6 frames carry `id:` and a cut stream resumes with
 run status for its final answer. After a daemon restart the driver reattaches
 to its run from `{ runId, sessionId, lastSeq }` and raises a pending approval
 card again.
+
+## The way back to Timon
+
+A Hermes run takes no MCP server, header or environment from its caller: its
+`instructions` are the only thing Timon writes per run. `src/way-back.ts`
+builds what goes there, after the agent's own instructions:
+
+- **always**, the mission id and the agent's name (not secrets). An agent on
+  the same host as Timon reaches it with the host's own tools and names its
+  mission with this id;
+- **when the connection gives a Timon address** (`timonUrl`, empty by
+  default), a remote MCP token issued for that turn (`ctx.mcp.issueToken`),
+  limited to `kanban_mark_as_done`, `kanban_mark_as_failed`,
+  `agent_send_message` and `agent_list`, with the address, the path
+  (`/api/remote-mcp`) and a short JSON-RPC how-to. The token is revoked when
+  the turn ends (answer, failure, STOP, closed session; after a daemon
+  restart, from the token's id kept in the resume state) and dies with the
+  mission anyway (24 h at most). A token that cannot be issued leaves the run
+  without it and says so in the thread.
+
+Nothing goes through an environment variable: Hermes runs the terminal of
+every session in one shared gateway process, whose `TIMON_*` variables belong
+to whichever mission started it. The instructions tell the agent to ignore
+them.
+
+The token is written into the run: the remote Hermes keeps it in that
+session's transcript, and Timon never logs it nor saves it (the resume state
+holds its id only). This is why the remote tools are an opt-in of the
+connection; Timon never calls the address, it only writes it.
 
 ## Develop
 

@@ -33,6 +33,7 @@ import {
   type Fetch, type GatewayTarget,
 } from './gateway.js';
 import { readSse } from './sse.js';
+import { endpointUrl, missionBlock, REMOTE_TOOLS, remoteToolsBlock, TOKEN_TTL_MS, type McpIssuer } from './way-back.js';
 
 export const DIALECT_ID = 'hermes-gateway';
 /** The backend agents name: one profile on the dialect, same id. */
@@ -78,6 +79,8 @@ export type DriverDeps = {
   resolveTarget(launch: RemoteSessionOpenArgs['launch'], model: string | null): Promise<GatewayTarget>;
   readonly log?: DriverLog;
   readonly timing?: Partial<Timing>;
+  /** `ctx.mcp`: issues the remote MCP token of a turn when the connection gives a Timon address. */
+  readonly mcp?: McpIssuer;
 };
 
 /** What a Hermes session does, settled by measure: it reopens by id with its
@@ -87,6 +90,7 @@ const CAPABILITIES: SessionCapabilities = Object.freeze({ loadSession: false, re
 const INTERRUPTED = 'The Hermes gateway restarted and interrupted this answer. The conversation is kept: send your message again to continue.';
 const LOST_ADMISSION = 'Timon restarted while your message was being sent to Hermes, and cannot tell whether it arrived. Send it again.';
 const RUN_GONE = 'The Hermes gateway no longer knows the run of this answer (it expired, or the gateway lost it). Send your message again.';
+const NO_TOKEN = '(Timon could not issue the token of this run\'s Timon tools: the agent cannot reach them during this answer. The daemon log says why.)';
 
 type Turn = {
   runId: string | null;
@@ -104,6 +108,8 @@ type Turn = {
   streamGone: boolean;
   /** Request ids already put to the user (or answered elsewhere). */
   readonly approvals: Set<string>;
+  /** The remote MCP token of this turn, by id only: revoked when the turn ends. */
+  tokenId: string | null;
 };
 
 function str(value: unknown): string | null {
@@ -261,6 +267,7 @@ export class HermesDriver implements SessionDriver {
     // A close is a stop: the run must not go on with nobody to read it. A
     // daemon that dies closes nothing, which leaves the run for the next one.
     if (turn.runId) void this.stopRun(turn.runId);
+    this.revokeToken(turn);
     const settle = turn.settle;
     turn.settle = null;
     settle?.reject(new Error('the session was closed'));
@@ -274,6 +281,7 @@ export class HermesDriver implements SessionDriver {
     if (!sessionId) throw new Error('The saved position of this Hermes conversation is unreadable.');
     const runId = str(state.runId);
     const lastSeq = typeof state.lastSeq === 'number' && Number.isInteger(state.lastSeq) ? state.lastSeq : -1;
+    const tokenId = str(state.tokenId);
     this.sessionId = sessionId;
     this.current = { sessionId, capabilities: CAPABILITIES, resumed: true };
     if (!resume.turnActive) {
@@ -281,6 +289,7 @@ export class HermesDriver implements SessionDriver {
       return this.current;
     }
     const turn = this.newTurn(runId, lastSeq);
+    turn.tokenId = tokenId;
     this.turn = turn;
     if (!runId) {
       this.finishTurn(turn, { kind: 'failed', message: LOST_ADMISSION });
@@ -314,6 +323,7 @@ export class HermesDriver implements SessionDriver {
       done: false,
       streamGone: false,
       approvals: new Set(),
+      tokenId: null,
     };
   }
 
@@ -326,6 +336,7 @@ export class HermesDriver implements SessionDriver {
       if (turn.done) return;
       turn.done = true;
       turn.abort.abort();
+      this.revokeToken(turn);
       const settle = turn.settle;
       turn.settle = null;
       settle?.reject(new Error(readable(err)));
@@ -335,8 +346,9 @@ export class HermesDriver implements SessionDriver {
   /** `POST /v1/runs`, retried with the same key. Null when the turn ended here. */
   private async admit(turn: Turn, text: string): Promise<string | null> {
     const target = this.target!;
-    const systemPrompt = this.args.spawn.systemPrompt;
-    const body = { input: text, session_id: this.sessionId, ...(systemPrompt ? { instructions: systemPrompt } : {}) };
+    const instructions = await this.instructions(turn);
+    if (turn.done) return null;
+    const body = { input: text, session_id: this.sessionId, ...(instructions ? { instructions } : {}) };
     const started = Date.now();
     let attempt = 0;
     for (;;) {
@@ -385,6 +397,58 @@ export class HermesDriver implements SessionDriver {
         throw err;
       }
     }
+  }
+
+  /**
+   * The run's `instructions`: the agent's own, then the way back to Timon —
+   * the mission id always, and this turn's remote MCP token when the
+   * connection gives a Timon address. Per run, never through the gateway's
+   * environment: its terminal is shared by every session it serves.
+   */
+  private async instructions(turn: Turn): Promise<string> {
+    const missionId = this.args.launch?.missionId ?? this.args.spawn.missionId ?? null;
+    const parts = [this.args.spawn.systemPrompt ?? ''];
+    if (missionId) parts.push(missionBlock(missionId, this.args.launch?.agentName ?? this.args.spawn.agentName ?? null));
+    const timonUrl = this.target?.timonUrl ?? null;
+    if (missionId && timonUrl) {
+      const remote = await this.issueToken(turn, missionId, timonUrl);
+      if (remote) parts.push(remote);
+    }
+    return parts.filter((p) => p.trim()).join('\n\n');
+  }
+
+  /** The how-to with a fresh token, or null (said in the thread) when none could be issued. */
+  private async issueToken(turn: Turn, missionId: string, timonUrl: string): Promise<string | null> {
+    let reason: string;
+    if (!this.deps.mcp) {
+      reason = 'no remote MCP issuer';
+    } else {
+      try {
+        const issued = await this.deps.mcp.issueToken({ missionId, scopes: REMOTE_TOOLS, ttl: TOKEN_TTL_MS });
+        turn.tokenId = issued.id;
+        // A turn stopped meanwhile: its token goes at once.
+        if (turn.done) { this.revokeToken(turn); return null; }
+        return remoteToolsBlock(endpointUrl(timonUrl, issued.path), issued.token);
+      } catch (err) {
+        reason = err instanceof Error ? err.message : 'unknown error';
+      }
+    }
+    this.deps.log?.warn(`hermes remote tools token not issued for mission ${missionId.slice(0, 8)}: ${reason}`);
+    this.emit({
+      type: 'assistant',
+      payload: { type: 'assistant', message: { id: randomUUID(), role: 'assistant', content: [{ type: 'text', text: NO_TOKEN }] } },
+    });
+    return null;
+  }
+
+  /** The turn's token dies with it. Best effort: it also dies with the mission. */
+  private revokeToken(turn: Turn): void {
+    const id = turn.tokenId;
+    if (!id || !this.deps.mcp) return;
+    turn.tokenId = null;
+    this.deps.mcp.revokeToken(id).catch((err: unknown) => {
+      this.deps.log?.warn(`hermes remote tools token not revoked: ${err instanceof Error ? err.message : 'unknown error'}`);
+    });
   }
 
   /** Reads the run to its end: stream first, status when the stream fails. */
@@ -643,6 +707,7 @@ export class HermesDriver implements SessionDriver {
     turn.wake.abort();
     turn.runId = null;
     turn.lastSeq = -1;
+    this.revokeToken(turn);
     this.save(true);
     const settle = turn.settle;
     turn.settle = null;
@@ -660,7 +725,9 @@ export class HermesDriver implements SessionDriver {
     for (const ev of events) this.emit(ev);
   }
 
-  /** `{ runId, sessionId, lastSeq }` and nothing else: never the key, never the URL. */
+  /** `{ runId, sessionId, lastSeq }`, plus the id of the turn's remote MCP
+   *  token when there is one (to revoke it after a restart). Never the key,
+   *  never the URL, never the token itself. */
   private save(force: boolean): void {
     if (this.closed || !this.sessionId) return;
     const now = Date.now();
@@ -668,7 +735,10 @@ export class HermesDriver implements SessionDriver {
     this.lastSave = now;
     const turn = this.turn && !this.turn.done ? this.turn : null;
     try {
-      this.args.host.saveResume({ runId: turn?.runId ?? null, sessionId: this.sessionId, lastSeq: turn?.lastSeq ?? -1 });
+      this.args.host.saveResume({
+        runId: turn?.runId ?? null, sessionId: this.sessionId, lastSeq: turn?.lastSeq ?? -1,
+        ...(turn?.tokenId ? { tokenId: turn.tokenId } : {}),
+      });
     } catch (err) {
       this.deps.log?.warn(`hermes resume state refused: ${err instanceof Error ? err.name : 'error'}`);
     }

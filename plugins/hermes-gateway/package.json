@@ -36,7 +36,8 @@
       "connections:register",
       "connections:users:read",
       "http:outbound",
-      "agents:manage"
+      "agents:manage",
+      "mcp:issue"
     ],
     "client": {
       "slots": ["settings.section"],

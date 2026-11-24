@@ -190,16 +190,44 @@ var configSchema = {
   parse(value) {
     const object = record2(value);
     if (!object) throw new Error("Expected an object");
-    const { profile, ...rest } = object;
+    const { profile, timonUrl, ...rest } = object;
     if (Object.keys(rest).length > 0) throw new Error("Unknown field");
-    if (profile === void 0 || profile === null || profile === "") return {};
-    if (typeof profile !== "string") throw new Error("Invalid profile");
-    const name2 = profile.trim();
-    if (!name2 || name2 === DEFAULT_PROFILE) return {};
-    if (!PROFILE_RE.test(name2)) throw new Error('A profile name is letters, digits, ".", "_" or "-"');
-    return { profile: name2 };
+    const name2 = parseProfile(profile);
+    const address = parseTimonUrl(timonUrl);
+    return { ...name2 ? { profile: name2 } : {}, ...address ? { timonUrl: address } : {} };
   }
 };
+function parseProfile(profile) {
+  if (profile === void 0 || profile === null || profile === "") return null;
+  if (typeof profile !== "string") throw new Error("Invalid profile");
+  const name2 = profile.trim();
+  if (!name2 || name2 === DEFAULT_PROFILE) return null;
+  if (!PROFILE_RE.test(name2)) throw new Error('A profile name is letters, digits, ".", "_" or "-"');
+  return name2;
+}
+function parseTimonUrl(value) {
+  if (value === void 0 || value === null) return null;
+  if (typeof value !== "string") throw new Error("Invalid Timon address");
+  const text = value.trim();
+  if (!text) return null;
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error("The Timon address is a full http(s) URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("The Timon address is a full http(s) URL");
+  if (url.username || url.password) throw new Error("The Timon address carries no user name or password");
+  if (url.search || url.hash || text.includes("?") || text.includes("#")) throw new Error("The Timon address has no query and no fragment");
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}
+function connectionTimonUrl(connection) {
+  try {
+    return parseTimonUrl(connection.config.timonUrl);
+  } catch {
+    return null;
+  }
+}
 function connectionProfile(connection) {
   const profile = connection.config.profile;
   return typeof profile === "string" && profile.trim() ? profile.trim() : DEFAULT_PROFILE;
@@ -285,16 +313,23 @@ async function resolveTarget(connections, typeId, launch, model) {
   if (!key) throw new UserFacingError("Your Hermes gateway connection has no API key: set it in Settings \u203A Secrets \u203A Connections.");
   const profile = connectionProfile(pick);
   const { root, base } = targetUrls(pick.url, profile);
-  return { root, base, profile, key, sessionKey: sessionKeyFor(owner) };
+  return { root, base, profile, key, sessionKey: sessionKeyFor(owner), timonUrl: connectionTimonUrl(pick) };
 }
 function connectionType() {
   return {
     name: TYPE_NAME,
     version: TYPE_VERSION,
     label: "Hermes Gateway",
-    description: "A Hermes gateway API server (Hermes 0.21.0 or later). One connection per Hermes profile; a profile has its own key.",
+    description: "A Hermes gateway API server (Hermes 0.21.0 or later). One connection per Hermes profile; a profile has its own key. A Timon address gives its agents a few Timon tools, with a token written into each run's instructions.",
     configSchema,
-    fields: [{ key: "profile", label: "Hermes profile (empty: default)", placeholder: DEFAULT_PROFILE }],
+    fields: [
+      { key: "profile", label: "Hermes profile (empty: default)", placeholder: DEFAULT_PROFILE },
+      {
+        key: "timonUrl",
+        label: "Timon address for remote tools (empty: off)",
+        placeholder: "https://timon.your-tailnet.ts.net"
+      }
+    ],
     secrets: [{ name: SECRET_KEY, label: "API server key (API_SERVER_KEY)", required: true }],
     timeoutMs: 15e3,
     async test(context) {
@@ -531,6 +566,39 @@ async function* readSse(body) {
   }
 }
 
+// src/way-back.ts
+var REMOTE_TOOLS = Object.freeze([
+  "kanban_mark_as_done",
+  "kanban_mark_as_failed",
+  "agent_send_message",
+  "agent_list"
+]);
+var TOKEN_TTL_MS = 24 * 60 * 6e4;
+function missionBlock(missionId, agentName) {
+  const agent = agentName ? `, agent \`${agentName}\`` : "";
+  return [
+    "## Timon",
+    `This run belongs to Timon mission \`${missionId}\`${agent}.`,
+    "When a Timon tool or command asks for your mission, use this id. Do not trust a TIMON_MISSION_ID variable in your terminal: it may belong to another mission."
+  ].join("\n");
+}
+function endpointUrl(timonUrl, path) {
+  return `${timonUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+function remoteToolsBlock(url, token, tools = REMOTE_TOOLS) {
+  return [
+    "### Timon tools over HTTP",
+    `During this run you can call these Timon tools: ${tools.join(", ")}. Use them to report back: close your task with a result (kanban_mark_as_done) or as failed (kanban_mark_as_failed), or write to another agent (agent_send_message).`,
+    `- Endpoint: POST ${url}`,
+    `- Headers: Authorization: Bearer ${token}`,
+    "  Content-Type: application/json",
+    "  Accept: application/json",
+    '- Body: one JSON-RPC 2.0 message. `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` lists the tools and their arguments; `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}` calls one.',
+    `- From a shell: curl -sS -X POST '${url}' -H 'Authorization: Bearer ${token}' -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
+    "The token works for this run only. Keep it out of files, commits, messages and URLs."
+  ].join("\n");
+}
+
 // src/driver.ts
 var DIALECT_ID = "hermes-gateway";
 var PROFILE_ID = "hermes-gateway";
@@ -549,6 +617,7 @@ var CAPABILITIES = Object.freeze({ loadSession: false, resume: true, mcp: false,
 var INTERRUPTED = "The Hermes gateway restarted and interrupted this answer. The conversation is kept: send your message again to continue.";
 var LOST_ADMISSION = "Timon restarted while your message was being sent to Hermes, and cannot tell whether it arrived. Send it again.";
 var RUN_GONE = "The Hermes gateway no longer knows the run of this answer (it expired, or the gateway lost it). Send your message again.";
+var NO_TOKEN = "(Timon could not issue the token of this run's Timon tools: the agent cannot reach them during this answer. The daemon log says why.)";
 function str2(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -687,6 +756,7 @@ var HermesDriver = class {
     turn.abort.abort();
     turn.wake.abort();
     if (turn.runId) void this.stopRun(turn.runId);
+    this.revokeToken(turn);
     const settle = turn.settle;
     turn.settle = null;
     settle?.reject(new Error("the session was closed"));
@@ -698,6 +768,7 @@ var HermesDriver = class {
     if (!sessionId) throw new Error("The saved position of this Hermes conversation is unreadable.");
     const runId = str2(state.runId);
     const lastSeq = typeof state.lastSeq === "number" && Number.isInteger(state.lastSeq) ? state.lastSeq : -1;
+    const tokenId = str2(state.tokenId);
     this.sessionId = sessionId;
     this.current = { sessionId, capabilities: CAPABILITIES, resumed: true };
     if (!resume.turnActive) {
@@ -705,6 +776,7 @@ var HermesDriver = class {
       return this.current;
     }
     const turn = this.newTurn(runId, lastSeq);
+    turn.tokenId = tokenId;
     this.turn = turn;
     if (!runId) {
       this.finishTurn(turn, { kind: "failed", message: LOST_ADMISSION });
@@ -734,7 +806,8 @@ var HermesDriver = class {
       cancelRequested: false,
       done: false,
       streamGone: false,
-      approvals: /* @__PURE__ */ new Set()
+      approvals: /* @__PURE__ */ new Set(),
+      tokenId: null
     };
   }
   async runTurn(turn, text) {
@@ -746,6 +819,7 @@ var HermesDriver = class {
       if (turn.done) return;
       turn.done = true;
       turn.abort.abort();
+      this.revokeToken(turn);
       const settle = turn.settle;
       turn.settle = null;
       settle?.reject(new Error(readable(err)));
@@ -754,8 +828,9 @@ var HermesDriver = class {
   /** `POST /v1/runs`, retried with the same key. Null when the turn ended here. */
   async admit(turn, text) {
     const target = this.target;
-    const systemPrompt = this.args.spawn.systemPrompt;
-    const body = { input: text, session_id: this.sessionId, ...systemPrompt ? { instructions: systemPrompt } : {} };
+    const instructions = await this.instructions(turn);
+    if (turn.done) return null;
+    const body = { input: text, session_id: this.sessionId, ...instructions ? { instructions } : {} };
     const started = Date.now();
     let attempt = 0;
     for (; ; ) {
@@ -804,6 +879,57 @@ var HermesDriver = class {
         throw err;
       }
     }
+  }
+  /**
+   * The run's `instructions`: the agent's own, then the way back to Timon —
+   * the mission id always, and this turn's remote MCP token when the
+   * connection gives a Timon address. Per run, never through the gateway's
+   * environment: its terminal is shared by every session it serves.
+   */
+  async instructions(turn) {
+    const missionId = this.args.launch?.missionId ?? this.args.spawn.missionId ?? null;
+    const parts = [this.args.spawn.systemPrompt ?? ""];
+    if (missionId) parts.push(missionBlock(missionId, this.args.launch?.agentName ?? this.args.spawn.agentName ?? null));
+    const timonUrl = this.target?.timonUrl ?? null;
+    if (missionId && timonUrl) {
+      const remote = await this.issueToken(turn, missionId, timonUrl);
+      if (remote) parts.push(remote);
+    }
+    return parts.filter((p) => p.trim()).join("\n\n");
+  }
+  /** The how-to with a fresh token, or null (said in the thread) when none could be issued. */
+  async issueToken(turn, missionId, timonUrl) {
+    let reason;
+    if (!this.deps.mcp) {
+      reason = "no remote MCP issuer";
+    } else {
+      try {
+        const issued = await this.deps.mcp.issueToken({ missionId, scopes: REMOTE_TOOLS, ttl: TOKEN_TTL_MS });
+        turn.tokenId = issued.id;
+        if (turn.done) {
+          this.revokeToken(turn);
+          return null;
+        }
+        return remoteToolsBlock(endpointUrl(timonUrl, issued.path), issued.token);
+      } catch (err) {
+        reason = err instanceof Error ? err.message : "unknown error";
+      }
+    }
+    this.deps.log?.warn(`hermes remote tools token not issued for mission ${missionId.slice(0, 8)}: ${reason}`);
+    this.emit({
+      type: "assistant",
+      payload: { type: "assistant", message: { id: randomUUID2(), role: "assistant", content: [{ type: "text", text: NO_TOKEN }] } }
+    });
+    return null;
+  }
+  /** The turn's token dies with it. Best effort: it also dies with the mission. */
+  revokeToken(turn) {
+    const id = turn.tokenId;
+    if (!id || !this.deps.mcp) return;
+    turn.tokenId = null;
+    this.deps.mcp.revokeToken(id).catch((err) => {
+      this.deps.log?.warn(`hermes remote tools token not revoked: ${err instanceof Error ? err.message : "unknown error"}`);
+    });
   }
   /** Reads the run to its end: stream first, status when the stream fails. */
   async follow(turn, initial) {
@@ -1046,6 +1172,7 @@ var HermesDriver = class {
     turn.wake.abort();
     turn.runId = null;
     turn.lastSeq = -1;
+    this.revokeToken(turn);
     this.save(true);
     const settle = turn.settle;
     turn.settle = null;
@@ -1059,7 +1186,9 @@ var HermesDriver = class {
   emitAll(events) {
     for (const ev of events) this.emit(ev);
   }
-  /** `{ runId, sessionId, lastSeq }` and nothing else: never the key, never the URL. */
+  /** `{ runId, sessionId, lastSeq }`, plus the id of the turn's remote MCP
+   *  token when there is one (to revoke it after a restart). Never the key,
+   *  never the URL, never the token itself. */
   save(force) {
     if (this.closed || !this.sessionId) return;
     const now = Date.now();
@@ -1067,7 +1196,12 @@ var HermesDriver = class {
     this.lastSave = now;
     const turn = this.turn && !this.turn.done ? this.turn : null;
     try {
-      this.args.host.saveResume({ runId: turn?.runId ?? null, sessionId: this.sessionId, lastSeq: turn?.lastSeq ?? -1 });
+      this.args.host.saveResume({
+        runId: turn?.runId ?? null,
+        sessionId: this.sessionId,
+        lastSeq: turn?.lastSeq ?? -1,
+        ...turn?.tokenId ? { tokenId: turn.tokenId } : {}
+      });
     } catch (err) {
       this.deps.log?.warn(`hermes resume state refused: ${err instanceof Error ? err.name : "error"}`);
     }
@@ -1178,7 +1312,8 @@ function apply(ctx) {
   ctx.backends.registerDialect(DIALECT_ID, createHermesDialect({
     fetch,
     resolveTarget: (launch, model) => resolveTarget(ctx.connections, typeId, launch, model),
-    log: { info: (m) => ctx.log.info(m), warn: (m) => ctx.log.warn(m) }
+    log: { info: (m) => ctx.log.info(m), warn: (m) => ctx.log.warn(m) },
+    mcp: ctx.mcp
   }));
   ctx.backends.registerProfile({
     id: PROFILE_ID,

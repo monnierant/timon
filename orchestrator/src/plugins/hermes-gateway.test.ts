@@ -19,13 +19,21 @@ type Connections = {
   userSecret(owner: string, id: string, name: string): Promise<string | undefined>;
 };
 type Launch = { kind: 'mission'; missionId: string; ownerUserId: string | null; agentName: string; project: string | null };
+type McpTokenInput = { missionId: string; scopes: readonly string[]; ttl?: number };
+type FakeMcp = {
+  issueToken(input: McpTokenInput): Promise<{ id: string; token: string; expiresAt: number; scopes: string[]; path: string }>;
+  revokeToken(id: string): Promise<boolean>;
+};
 
 const plugin = await import('../../../plugins/hermes-gateway/lib/index.js') as {
   createHermesDialect(deps: {
     fetch: typeof globalThis.fetch;
     resolveTarget(launch: unknown, model: string | null): Promise<unknown>;
     timing?: Timing;
+    mcp?: FakeMcp;
+    log?: { info(message: string): void; warn(message: string): void };
   }): RemoteDialect;
+  connectionType(): { configSchema: { parse(value: unknown): Record<string, unknown> }; fields?: Array<{ key: string }> };
   resolveTarget(connections: Connections, typeId: string, launch: unknown, model: string | null): Promise<unknown>;
   parseModel(model: string | null): { profile: string; connectionId: string | null } | null;
 };
@@ -119,17 +127,20 @@ function killableFetch() {
 function open(gw: FakeGateway, options: {
   conns?: Connections; model?: string | null; owner?: string | null; resume?: RemoteSessionResume;
   resumeSession?: string | null; answers?: Answer[]; timing?: Timing; fetch?: typeof globalThis.fetch;
+  mcp?: FakeMcp; systemPrompt?: string; logs?: string[];
 } = {}) {
   const conns = options.conns ?? connections([connection(gw)]);
   const dialect = plugin.createHermesDialect({
     fetch: options.fetch ?? globalThis.fetch,
     resolveTarget: (l, model) => plugin.resolveTarget(conns, TYPE, l, model),
     timing: { ...FAST, ...options.timing },
+    ...(options.mcp ? { mcp: options.mcp } : {}),
+    ...(options.logs ? { log: { info: (m: string) => { options.logs!.push(m); }, warn: (m: string) => { options.logs!.push(m); } } } : {}),
   });
   const fake = fakeHost(options.answers);
   const driver: SessionDriver = dialect.openSession({
     spawn: {
-      agentName: 'hermes.default', systemPrompt: 'You are terse.', message: '', resumeSession: options.resumeSession ?? null,
+      agentName: 'hermes.default', systemPrompt: options.systemPrompt ?? 'You are terse.', message: '', resumeSession: options.resumeSession ?? null,
       cfg: { model: options.model === undefined ? 'hermes/default' : options.model ?? undefined } as never, missionId: 'mission-1',
     },
     host: fake.host,
@@ -192,7 +203,7 @@ for (const version of ['0.21.0', '0.21.6']) {
     const run = gw.lastRun()!;
     assert.equal(run.sessionKey, 'timon:ada', 'one Hermes memory per Timon account');
     assert.equal(run.body.session_id, info.sessionId);
-    assert.equal(run.body.instructions, 'You are terse.');
+    assert.ok(String(run.body.instructions).startsWith('You are terse.\n\n'), 'the agent\'s own instructions first');
     const post = gw.requests.find((r) => r.method === 'POST' && r.path === '/v1/runs')!;
     assert.match(String(post.headers['idempotency-key']), /^timon-/);
     // The resume state: never the key, never the URL; run id during the turn, cleared after.
@@ -578,3 +589,147 @@ test('a known session is reopened; images are announced as not sent', () => with
   assert.equal((await unknown.driver.start()).resumed, false);
   unknown.driver.close();
 }));
+
+
+/* ── The way back to Timon ──────────────────────────────────────────────── */
+
+const TOKEN = 'tmcp_witness-token-0123456789abcdefghijklmnop';
+
+/** `ctx.mcp` as the daemon lends it: what was issued, what was revoked. */
+function fakeMcp(options: { fail?: string } = {}) {
+  const issued: McpTokenInput[] = [];
+  const revoked: string[] = [];
+  let n = 0;
+  const mcp: FakeMcp = {
+    issueToken: async (input) => {
+      issued.push(input);
+      if (options.fail) throw new Error(options.fail);
+      n += 1;
+      return { id: `grant-${n}`, token: `${TOKEN}-${n}`, expiresAt: Date.now() + 60_000, scopes: [...input.scopes], path: '/api/remote-mcp' };
+    },
+    revokeToken: async (id) => { revoked.push(id); return true; },
+  };
+  return { mcp, issued, revoked };
+}
+
+const remoteConnection = (gw: FakeGateway, timonUrl = 'https://timon.example.ts.net') => connections([connection(gw, { config: { timonUrl } })]);
+
+test('the mission id rides in every run\'s instructions, after the agent\'s own, with no token by default', () => withGateway({}, async (gw) => {
+  const { mcp, issued } = fakeMcp();
+  const { driver } = open(gw, { mcp });
+  await driver.start();
+  await driver.prompt('hello');
+  await driver.prompt('hello again');
+  const runs = [...gw.runs.values()];
+  assert.equal(runs.length, 2);
+  for (const run of runs) {
+    const instructions = String(run.body.instructions);
+    assert.ok(instructions.startsWith('You are terse.\n\n'), 'the agent\'s own instructions come first');
+    assert.match(instructions, /Timon mission `mission-1`/);
+    assert.match(instructions, /agent `hermes\.default`/);
+    assert.match(instructions, /TIMON_MISSION_ID/, 'warns that a terminal variable may name another mission');
+    assert.doesNotMatch(instructions, /remote-mcp|Authorization|tmcp_/, 'remote tools are off by default');
+  }
+  assert.equal(issued.length, 0, 'no token is issued while the connection does not ask for it');
+  driver.close();
+}));
+
+test('an agent without instructions of its own still gets the mission id', () => withGateway({}, async (gw) => {
+  const { driver } = open(gw, { systemPrompt: '' });
+  await driver.start();
+  await driver.prompt('hello');
+  assert.match(String(gw.lastRun()!.body.instructions), /^## Timon\n/);
+  driver.close();
+}));
+
+test('remote tools on: the run carries the address, the path and a token limited to named tools, revoked when the turn ends', () => withGateway({}, async (gw) => {
+  const { mcp, issued, revoked } = fakeMcp();
+  const { driver, saved, emitted } = open(gw, { conns: remoteConnection(gw, 'https://timon.example.ts.net/'), mcp });
+  await driver.start();
+  const pending = driver.prompt('slow please');
+  await until(() => gw.lastRun()?.status === 'running', 'the run to start');
+  assert.deepEqual(issued, [{
+    missionId: 'mission-1',
+    scopes: ['kanban_mark_as_done', 'kanban_mark_as_failed', 'agent_send_message', 'agent_list'],
+    ttl: 24 * 60 * 60_000,
+  }]);
+  const instructions = String(gw.lastRun()!.body.instructions);
+  assert.match(instructions, /Timon mission `mission-1`/);
+  assert.ok(instructions.includes('POST https://timon.example.ts.net/api/remote-mcp'), 'the address and the path, joined once');
+  assert.ok(instructions.includes(`Authorization: Bearer ${TOKEN}-1`), 'the token, as a header');
+  for (const tool of ['kanban_mark_as_done', 'kanban_mark_as_failed', 'agent_send_message', 'agent_list']) assert.ok(instructions.includes(tool), tool);
+  assert.match(instructions, /tools\/call/);
+  assert.equal(revoked.length, 0, 'alive while the run goes on');
+  await driver.cancel();
+  await pending;
+  assert.deepEqual(revoked, ['grant-1'], 'the token dies with its turn');
+
+  // The next turn gets a fresh token, which dies with it too.
+  await driver.prompt('hello again');
+  assert.equal(issued.length, 2);
+  assert.ok(String(gw.lastRun()!.body.instructions).includes(`${TOKEN}-2`));
+  assert.deepEqual(revoked, ['grant-1', 'grant-2']);
+  // Never in the saved state, never in what the thread shows.
+  assert.doesNotMatch(JSON.stringify(saved), /tmcp_/);
+  assert.doesNotMatch(JSON.stringify(emitted), /tmcp_/);
+  driver.close();
+}));
+
+test('remote tools on: a token that cannot be issued leaves the run without it, says so in the thread, and logs no secret', () => withGateway({}, async (gw) => {
+  const { mcp } = fakeMcp({ fail: 'plugin hermes-gateway lacks the mcp:issue permission' });
+  const logs: string[] = [];
+  const { driver, emitted } = open(gw, { conns: remoteConnection(gw), mcp, logs });
+  await driver.start();
+  assert.equal((await driver.prompt('hello')).stopReason, 'end_turn', 'the turn runs anyway');
+  const instructions = String(gw.lastRun()!.body.instructions);
+  assert.match(instructions, /Timon mission `mission-1`/);
+  assert.doesNotMatch(instructions, /remote-mcp|Authorization/);
+  assert.ok(texts(emitted).some((t) => /could not issue/i.test(t ?? '')), 'the user is told');
+  assert.ok(logs.some((l) => l.includes('mcp:issue')), 'the daemon log says why');
+  driver.close();
+}));
+
+test('a session closed under a turn revokes its token', () => withGateway({}, async (gw) => {
+  const { mcp, revoked } = fakeMcp();
+  const { driver } = open(gw, { conns: remoteConnection(gw), mcp });
+  await driver.start();
+  void driver.prompt('slow please').catch(() => undefined);
+  await until(() => gw.lastRun()?.status === 'running', 'the run to start');
+  driver.close();
+  await until(() => revoked.length === 1, 'the revocation');
+  assert.deepEqual(revoked, ['grant-1']);
+}));
+
+test('reattached after a daemon restart, the driver revokes the token of the run it finishes, known by its id only', () => withGateway({}, async (gw) => {
+  const first = killableFetch();
+  const one = fakeMcp();
+  const a = open(gw, { fetch: first.fetch, conns: remoteConnection(gw), mcp: one.mcp });
+  const info = await a.driver.start();
+  void a.driver.prompt('slow please').catch(() => undefined);
+  await until(() => (a.saved.at(-1)?.runId ?? null) !== null, 'the run to be saved');
+  first.kill();
+  const state = a.saved.at(-1)!;
+  assert.equal(state.tokenId, 'grant-1', 'the id of the token, not the token');
+  assert.doesNotMatch(JSON.stringify(state), /tmcp_/);
+  const two = fakeMcp();
+  const b = open(gw, { resumeSession: info.sessionId, resume: { state, turnActive: true }, conns: remoteConnection(gw), mcp: two.mcp });
+  await b.driver.start();
+  gw.complete(gw.lastRun()!.id);
+  await until(() => results(b.emitted).length === 1, 'the reattached result');
+  assert.deepEqual(two.revoked, ['grant-1']);
+  assert.equal(two.issued.length, 0, 'nothing new is issued for a run already going');
+  b.driver.close();
+}));
+
+test('the connection\'s Timon address: empty is off, an http(s) address is kept without its trailing slash, anything else is refused', () => {
+  const type = plugin.connectionType();
+  assert.ok(type.fields?.some((f) => f.key === 'timonUrl'), 'a field of the connection form');
+  assert.deepEqual(type.configSchema.parse({}), {});
+  assert.deepEqual(type.configSchema.parse({ timonUrl: '' }), {}, 'empty = off');
+  assert.deepEqual(type.configSchema.parse({ timonUrl: '  https://timon.example.ts.net/  ' }), { timonUrl: 'https://timon.example.ts.net' });
+  assert.deepEqual(type.configSchema.parse({ timonUrl: 'http://127.0.0.1:8765' }), { timonUrl: 'http://127.0.0.1:8765' }, 'an SSH tunnel');
+  assert.deepEqual(type.configSchema.parse({ timonUrl: 'https://proxy.example/timon/', profile: 'coder' }), { profile: 'coder', timonUrl: 'https://proxy.example/timon' });
+  for (const bad of ['ftp://timon.example', 'timon.example', 'https://user:pw@timon.example', 'https://timon.example/?t=1', 'https://timon.example/#x', 42]) {
+    assert.throws(() => type.configSchema.parse({ timonUrl: bad }), String(bad));
+  }
+});
