@@ -109,7 +109,9 @@ import { reservedRouteSegment } from './reserved-routes.js';
  * the named homes of the program an agent may run on;
  * `ProfileRuntime.runtimeProfile`, `ProviderAgentConfig.runtime_profile`, and
  * `DiscoveredModel` / `CatalogModel` `searchOnly` and `current`. All optional:
- * a provider that declares none behaves as before. No member of
+ * a provider that declares none behaves as before. Same wave, optional too:
+ * `RuntimeProfilesStrategy.skills`, the folder of a home where Timon may write
+ * its `timon` skill (setting `TIMON_RUNTIME_PROFILE_SKILL`, off by default). No member of
  * `PluginContext` changes.
  */
 export const PLUGIN_API_VERSION = 18;

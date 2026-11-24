@@ -66,6 +66,10 @@ test('wrong types and values are named, not guessed', () => {
   assert.match(problemsOf({ runtimeProfiles: { label: '', list: async () => [], env: () => ({}) } }), /runtimeProfiles/);
   assert.match(problemsOf({ runtimeProfiles: { label: 'Profile', list: [] } }), /runtimeProfiles/);
   assert.equal(problemsOf({ runtimeProfiles: { label: 'Profile', list: async () => [], env: () => ({}) } }), '');
+  const homes = { label: 'Profile', list: async () => [], env: () => ({}) };
+  assert.match(problemsOf({ runtimeProfiles: { ...homes, skills: { dir: '/skills', toolNames: 'x' } } }), /runtimeProfiles\.skills/);
+  assert.match(problemsOf({ runtimeProfiles: { ...homes, skills: { dir: () => null, toolNames: ' ' } } }), /runtimeProfiles\.skills/);
+  assert.equal(problemsOf({ runtimeProfiles: { ...homes, skills: { dir: () => null, toolNames: 'Tools are `x__<tool>`.' } } }), '');
   assert.match(dialectProblems(null).join(), /object/);
 });
 

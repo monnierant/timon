@@ -4003,7 +4003,8 @@
       "members": {
         "label": "string",
         "list": "(profile: ProfileRuntime) => Promise<string[]>",
-        "env": "(name: string, profile: ProfileRuntime) => Record<string, string>"
+        "env": "(name: string, profile: ProfileRuntime) => Record<string, string>",
+        "skills?": "{ dir(env: Readonly<Record<string, string | undefined>>): string | null; readonly toolNames: string; } | undefined"
       }
     }
   },

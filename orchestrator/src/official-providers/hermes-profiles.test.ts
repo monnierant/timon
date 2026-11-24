@@ -66,3 +66,28 @@ test('the Hermes row carries the strategy; the other ACP agents have none', () =
   assert.equal(hermes?.runtimeProfiles?.label, 'Hermes profile');
   for (const agent of ACP_AGENTS.filter((a) => a.id !== 'hermes')) assert.equal(agent.runtimeProfiles, undefined, agent.id);
 });
+
+test('skills.dir: the skills folder of the home the launched process gets, the platform default when none is named', () => {
+  const linux = hermesProfiles({ platform: 'linux', homedir: () => '/home/ann' });
+  const dir = linux.skills!.dir;
+  assert.equal(dir({ HERMES_HOME: '/srv/hermes/profiles/coder' }), join('/srv/hermes/profiles/coder', 'skills'));
+  assert.equal(dir({ HERMES_HOME: '/srv/hermes' }), join('/srv/hermes', 'skills'));
+  assert.equal(dir({ HERMES_HOME: '~/hermes-data' }), join('/home/ann', 'hermes-data', 'skills'));
+  assert.equal(dir({}), join('/home/ann', '.hermes', 'skills'));
+  assert.equal(dir({ HERMES_HOME: '  ' }), join('/home/ann', '.hermes', 'skills'));
+  assert.equal(dir({ HERMES_DATA_DIR_SUFFIX: '-dev' }), join('/home/ann', '.hermes-dev', 'skills'));
+  // Hermes expands variables Timon does not see: no guess, no write.
+  assert.equal(dir({ HERMES_HOME: '$DATA/hermes' }), null);
+  assert.equal(dir({ HERMES_HOME: 'relative/home' }), null);
+  const windows = hermesProfiles({ platform: 'win32', homedir: () => 'C:\\Users\\ann', localAppData: 'D:\\Local' });
+  assert.equal(windows.skills!.dir({}), join('D:\\Local', 'hermes', 'skills'));
+});
+
+test('skills.toolNames: the shape of a Timon tool under Hermes and how to load one, never a full name', () => {
+  const note = hermesProfiles({ platform: 'linux', homedir: () => '/nowhere' }).skills!.toolNames;
+  assert.match(note, /mcp__editor_timon_<8 hex>__<tool>/);
+  assert.match(note, /tool_search/);
+  assert.match(note, /tool_describe/);
+  assert.match(note, /tool_call/);
+  assert.equal(/mcp__editor_timon_[0-9a-f]{8}__/.test(note), false);
+});

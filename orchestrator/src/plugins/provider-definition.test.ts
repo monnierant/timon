@@ -575,6 +575,54 @@ test('C6: the variables a provider declared passthrough reach its process, and i
   }
 });
 
+test('C6: a provider whose runtime profiles name a skills folder gets the `timon` skill there at launch, only with the setting on', async () => {
+  const restore = allowExec('acme-agent');
+  const ctx = pluginContext('acme-plugin-skills');
+  const { getBackend } = await import('../backends/index.js');
+  const { invalidateSettingsCache } = await import('../settings.js');
+  const { mkdtempSync, existsSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const skills = mkdtempSync(join(tmpdir(), 'acme-skills-'));
+  const seen: Array<string | undefined> = [];
+  const launch = () => getBackend('acme-skills-profile').buildSpawn({
+    agentName: 'a', systemPrompt: '', message: 'hi', resumeSession: null, cfg: { cwd: process.cwd(), runtime_profile: 'alpha' }, missionId: 'm-skills',
+  } as never);
+  let release: (() => void) | undefined;
+  try {
+    const def = {
+      ...perTurn('acme-skills'),
+      declares: { binary: { names: ['acme-agent'] } },
+      launch: async (spawn: { message: string; cfg: { cwd?: string } }, profile: { cmd: string }) => ({
+        cmd: profile.cmd, args: [spawn.message], cwd: spawn.cfg.cwd, initialStdin: null, env: { ACME_HOME: '/acme/profiles/alpha' },
+      }),
+      runtimeProfiles: {
+        label: 'Acme profile', list: async () => ['alpha'], env: () => ({ ACME_HOME: '/acme/profiles/alpha' }),
+        skills: {
+          dir: (env: Readonly<Record<string, string | undefined>>) => { seen.push(env.ACME_HOME); return skills; },
+          toolNames: 'Acme names its tools `x__<tool>`.',
+        },
+      },
+    } as NativeProviderDefinition;
+    release = ctx.provider.registerProvider(def);
+    registry.registerProfile('acme-plugin-skills', { id: 'acme-skills-profile', dialect: 'acme-skills', label: 'Skills', models: [], defaultModel: null });
+    delete process.env.TIMON_RUNTIME_PROFILE_SKILL;
+    invalidateSettingsCache();
+    await launch();
+    assert.equal(existsSync(join(skills, 'timon')), false, 'off by default: nothing written');
+    process.env.TIMON_RUNTIME_PROFILE_SKILL = '1';
+    invalidateSettingsCache();
+    await launch();
+    assert.deepEqual(seen, ['/acme/profiles/alpha'], 'the folder comes from the environment the process is launched with');
+    assert.match(readFileSync(join(skills, 'timon', 'SKILL.md'), 'utf8'), /Acme names its tools/);
+  } finally {
+    release?.();
+    delete process.env.TIMON_RUNTIME_PROFILE_SKILL;
+    invalidateSettingsCache();
+    restore();
+  }
+});
+
 test('C6: a passthrough name that reads like a credential refuses the provider', () => {
   const restore = allowExec('acme-agent');
   const ctx = pluginContext('acme-plugin-r');
