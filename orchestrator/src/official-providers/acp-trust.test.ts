@@ -31,6 +31,7 @@ const { dbApi } = await import('../db.js');
 const { seal } = await import('../secrets/box.js');
 const { resolveMasterKey } = await import('../secrets/key.js');
 const { backendTrust, isProductBackend, getDialect } = await import('../backends/registry.js');
+const { hashApiToken } = await import('../users/api-tokens.js');
 
 const VAULT_VALUE = 'vault-value-acp-witness';
 {
@@ -50,10 +51,12 @@ assert.ok((await mountOfficialProviders()).includes('provider-acp'));
 // Antigravity ships off (Google's terms): these tests switch it on, as a person does from its provider page.
 (await import('../backends/overlays.js')).saveBackendOverlay('antigravity', { disabled: false });
 
+/** `sharedProcess`: the agent runs every session's terminal in one process that outlives the mission
+ *  (Hermes 0.23's gateway), so the token is the session's only, never the process's (TIM-3). */
 const AGENTS = [
-  { backend: 'opencode', args: ['acp'] },
-  { backend: 'hermes', args: [] as string[] },
-  { backend: 'antigravity', args: ['acp'] },
+  { backend: 'opencode', args: ['acp'], sharedProcess: false },
+  { backend: 'hermes', args: [] as string[], sharedProcess: true },
+  { backend: 'antigravity', args: ['acp'], sharedProcess: false },
 ] as const;
 
 for (const { backend } of AGENTS) {
@@ -103,13 +106,21 @@ test('opencode, Hermes, Antigravity and Pi are the release\'s own providers: off
   }
 });
 
-for (const { backend, args } of AGENTS) {
+for (const { backend, args, sharedProcess } of AGENTS) {
   test(`a mission on ${backend} starts the agent under the default policy with its own token and vault slice; the session carries that token and no reference`, async () => {
     const run = await launch(`${backend}.witness`);
     try {
       assert.deepEqual(run.args, args, 'the command line the agent\'s row declares');
-      const token = run.env.TIMON_API_TOKEN;
-      assert.ok(token && !token.startsWith('timon-seal-'), 'the mission\'s own token, in the process environment');
+      const sessionToken = (run.piped().match(/"name":"TIMON_API_TOKEN","value":"([^"]+)"/) ?? [])[1];
+      const token = sharedProcess ? sessionToken : run.env.TIMON_API_TOKEN;
+      assert.ok(token && !token.startsWith('timon-seal-'), 'the mission\'s own token');
+      assert.equal(dbApi.getApiTokenByHash(hashApiToken(token))?.mission_id, run.missionId, 'bound to this mission');
+      if (sharedProcess) {
+        // A later mission's terminal would read whatever is here.
+        assert.equal(run.env.TIMON_API_TOKEN, undefined, 'no token in the process a later mission reuses');
+        assert.equal(run.env.TIMON_MISSION_ID, undefined, 'nor this mission\'s identity');
+        assert.equal(run.env.TIMON_SHARED_PROCESS, '1', 'the CLI there knows it has no mission to act as');
+      }
       assert.equal(run.env.VAULT_ACP_WITNESS, VAULT_VALUE, 'the vault slice the mission was granted');
       if (backend === 'antigravity') assert.equal(run.env.GEMINI_API_KEY, '', 'Antigravity runs on the Google sign-in, never on a Gemini API key');
       else assert.equal(run.env.GEMINI_API_KEY, 'AIza-vault-witness', `${backend}: a granted secret is untouched`);
