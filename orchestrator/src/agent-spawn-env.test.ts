@@ -124,6 +124,38 @@ test('first-run fake spawn: the child receives its mission token, not the daemon
   }
 });
 
+test('a shared process gets no mission identity or token, whatever the spec and the parent carry', () => {
+  const previous = process.env.TIMON_API_TOKEN;
+  process.env.TIMON_API_TOKEN = 'token-du-parent';
+  try {
+    for (const untrusted of [false, true]) {
+      const env = missionEnv({
+        missionId: 'mission-partagee',
+        agentName: 'env-partage',
+        specEnv: { FOO: 'bar', TIMON_MISSION_ID: 'spec-mission', timon_api_token: 'spec-token', TIMON_TRACE_ID: 'trace' },
+        cwd: tmpdir(),
+        untrusted,
+        sharedProcess: true,
+      });
+      for (const key of Object.keys(env)) {
+        assert.ok(
+          !['TIMON_API_TOKEN', 'TIMON_MISSION_ID', 'TIMON_TRACE_ID', 'TIMON_PROJECT', 'TIMON_WORKFLOW_RUN_ID', 'TIMON_WORKFLOW_NODE_ID']
+            .includes(key.toUpperCase()),
+          `untrusted=${untrusted}: ${key} is gone`,
+        );
+      }
+      assert.ok(!Object.values(env).includes('token-du-parent'), 'nor the parent token under any name');
+      assert.equal(env.TIMON_SHARED_PROCESS, '1');
+      assert.equal(env.TIMON_AGENT, 'env-partage');
+      assert.equal(env.TIMON_API, 'http://localhost:3000');
+      assert.equal(env.FOO, 'bar');
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TIMON_API_TOKEN;
+    else process.env.TIMON_API_TOKEN = previous;
+  }
+});
+
 /* ── S.4: the mission env is no longer `process.env` (SECRETS-VAULT.md §6.1) ── */
 
 /** Sets a sealed secret for its own row, as the S.5 routes will. */

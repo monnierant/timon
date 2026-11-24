@@ -193,6 +193,13 @@ export function missionEnv(opts: {
    * provider plugin) hands the same value here instead of asking for a second one.
    */
   token?: string;
+  /**
+   * The process outlives this mission and runs the commands of the next ones
+   * (`BackendCapabilities.processPerMission` false): it gets nothing that
+   * identifies this mission or acts as it (`sharedProcessEnv`). The caller
+   * issues the token for the MCP servers itself.
+   */
+  sharedProcess?: boolean;
 }): NodeJS.ProcessEnv {
   const project = opts.project ?? projectFromCwd(opts.cwd) ?? '';
   if (opts.untrusted) return untrustedMissionEnv(opts, project);
@@ -201,8 +208,9 @@ export function missionEnv(opts: {
   const base = inheritEnvEnabled()
     ? { ...process.env }
     : { ...systemEnv(), ...(opts.secretsEnv ?? secretsEnvFor({ agent: opts.agentName, project: project || null })) };
-  const token = opts.token ?? missionApiToken(opts.missionId);
   const inherited = { ...base, ...(opts.specEnv ?? {}) };
+  if (opts.sharedProcess) return sharedProcessEnv(inherited, opts.agentName);
+  const token = opts.token ?? missionApiToken(opts.missionId);
   return {
     ...inherited,
     ...missionEgressEnv(opts.missionId, inherited),
@@ -245,7 +253,7 @@ export function missionIdentityEnv(
 }
 
 function untrustedMissionEnv(
-  opts: { missionId: string; agentName: string; specEnv?: NodeJS.ProcessEnv },
+  opts: { missionId: string; agentName: string; specEnv?: NodeJS.ProcessEnv; sharedProcess?: boolean },
   project: string,
 ): NodeJS.ProcessEnv {
   // A plugin's own spec may not name the credential, whatever its case on Windows.
@@ -253,8 +261,36 @@ function untrustedMissionEnv(
     Object.entries(opts.specEnv ?? {}).filter(([key]) => key.toUpperCase() !== 'TIMON_API_TOKEN'),
   );
   const inherited = { ...systemEnv(), ...spec };
+  if (opts.sharedProcess) return sharedProcessEnv(inherited, opts.agentName);
   // Its own egress credential, not the mission's token: it opens the proxy and no route.
   return { ...inherited, ...missionEgressEnv(opts.missionId, inherited), ...missionIdentityEnv(opts, project) };
+}
+
+/** What `missionIdentityEnv` and the launch put that belongs to ONE mission. */
+const PER_MISSION_ENV = [
+  'TIMON_API_TOKEN', 'TIMON_MISSION_ID', 'TIMON_TRACE_ID', 'TIMON_WORKFLOW_RUN_ID', 'TIMON_WORKFLOW_NODE_ID', 'TIMON_PROJECT',
+] as const;
+
+/**
+ * The environment of a launch whose process runs the commands of every mission
+ * of its agent (`BackendCapabilities.processPerMission` false): Hermes 0.23
+ * starts one gateway per profile with the environment of the first `hermes-acp`
+ * and runs every later session's terminal in it. A mission id, a token or an
+ * egress credential put here would be read, and used, by the next missions.
+ *
+ * So: no mission identity, no token, no egress proxy (its credential names the
+ * mission; the proxy only journals, so these connections go unjournaled rather
+ * than blocked), whatever the spec or the daemon's environment carried. The agent's
+ * name and the daemon's address stay: they are the same for every mission of
+ * this process. `TIMON_SHARED_PROCESS=1` tells the `timon` CLI it has no
+ * mission to act as, so it refuses the daemon-token rather than fall back to the
+ * operator's rights. Timon's MCP servers are not concerned: they get the
+ * mission's identity and token per session (`provider-mcp.ts`).
+ */
+export function sharedProcessEnv(inherited: NodeJS.ProcessEnv, agentName: string): NodeJS.ProcessEnv {
+  const dropped = new Set<string>(PER_MISSION_ENV);
+  const kept = Object.fromEntries(Object.entries(inherited).filter(([key]) => !dropped.has(key.toUpperCase())));
+  return { ...kept, TIMON_AGENT: agentName, TIMON_API: apiBaseUrl(), TIMON_SHARED_PROCESS: '1' };
 }
 
 
@@ -1973,6 +2009,7 @@ async function spawnMissionProcess(
   confirmSpawn: boolean,
 ): Promise<MissionLaunch> {
   const untrusted = trust === 'third-party';
+  const sharedProcess = !backendCapabilities(backend.name).processPerMission;
   const spec: SpawnResult = await buildSealedSpawn(backend, spawnOpts, seal);
 
   // child_process.spawn (not node-pty): the CLI must not detect a TTY on
@@ -2041,9 +2078,10 @@ async function spawnMissionProcess(
     project: cfg.project,
     secretsEnv: vault?.env,
     untrusted,
+    sharedProcess,
     // One token per launch: an official plugin's references resolve to the one the
     // process gets, so neither is revoked by the other.
-    ...(seal && !untrusted ? { token: seal.token() } : {}),
+    ...(seal && !untrusted && !sharedProcess ? { token: seal.token() } : {}),
   }), {
     platform: host.platform,
     binary: backendBin,
@@ -2070,7 +2108,8 @@ async function spawnMissionProcess(
     if (launch.fence.packageCacheDir) Object.assign(procEnv, packageCacheEnv(launch.fence.packageCacheDir));
   }
   // Issued once: a second call would revoke the row the first one handed out.
-  const missionToken = seal ? seal.token() : procEnv.TIMON_API_TOKEN ?? '';
+  // A shared process was given none: the MCP servers still need the mission's own.
+  const missionToken = seal ? seal.token() : sharedProcess && !untrusted ? missionApiToken(missionId) : procEnv.TIMON_API_TOKEN ?? '';
   // Nothing awaited since: a third party's program is still the file checked for this launch.
   assertSpawnPinned(spec);
   const proc = host.spawn(launch.cmd, launch.args, {

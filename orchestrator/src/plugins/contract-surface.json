@@ -2554,7 +2554,8 @@
         "worktree": "boolean",
         "timonMcp": "boolean",
         "attachments": "boolean",
-        "timonPreamble": "boolean"
+        "timonPreamble": "boolean",
+        "processPerMission": "boolean"
       }
     },
     "BackendLaunchContext": {
@@ -2674,7 +2675,8 @@
         "worktree",
         "timonMcp",
         "attachments",
-        "timonPreamble"
+        "timonPreamble",
+        "processPerMission"
       ],
       "since": 11
     },
@@ -2689,7 +2691,8 @@
         "worktree": true,
         "timonMcp": true,
         "attachments": true,
-        "timonPreamble": true
+        "timonPreamble": true,
+        "processPerMission": true
       },
       "since": 11
     },
