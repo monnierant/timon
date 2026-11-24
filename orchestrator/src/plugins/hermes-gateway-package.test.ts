@@ -155,7 +155,8 @@ function account(name: string, permissions: string[] = []): string {
 test('apply registers a remote backend that declares what it cannot do, and its connection type', async () => {
   await loaded();
   assert.equal(isBackendName('hermes-gateway'), true);
-  assert.deepEqual(backendCapabilities('hermes-gateway'), { worktree: false, timonMcp: false, attachments: false, timonPreamble: false });
+  // processPerMission keeps its default: the gateway spawns no local process a mission's environment could reach.
+  assert.deepEqual(backendCapabilities('hermes-gateway'), { worktree: false, timonMcp: false, attachments: false, timonPreamble: false, processPerMission: true });
   assert.equal(catalogClaimsModel('hermes-gateway', 'hermes/default'), true);
   assert.equal(catalogClaimsModel('hermes-gateway', 'hermes/coder'), true, 'any profile, by the slug prefix');
   const type = integrationRegistries.connectionTypes.get('hermes-gateway:gateway@1')?.definition;
