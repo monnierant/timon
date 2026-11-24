@@ -193,10 +193,10 @@ test('a task waiting for an answer says so, and the validation card wins over it
     // A card open live asks for validation: that is what the user acts on.
     await m.render(task({ status: 'IN_PROGRESS', mission_id: 'm-3', started_at: NOW - 60_000, awaiting_answer: true }), { needsAction: true });
     assert.match(m.text('context'), /Validation required/);
-    assert.equal(m.card().querySelector('[data-task-awaiting-answer]'), null);
+    assert.ok(!m.card().querySelector('[data-task-awaiting-answer]'));
 
     await m.render(task({ status: 'IN_PROGRESS', mission_id: 'm-3', started_at: NOW - 60_000 }));
-    assert.equal(m.card().querySelector('[data-task-awaiting-answer]'), null, 'a task at work does not wait');
+    assert.ok(!m.card().querySelector('[data-task-awaiting-answer]'), 'a task at work does not wait');
   } finally {
     await m.unmount();
   }
