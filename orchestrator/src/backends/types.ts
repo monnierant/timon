@@ -635,6 +635,15 @@ export type SessionCapabilities = {
  *     may head the agent's system prompt. False for an agent that already has
  *     its own identity and runs elsewhere: it is sent the agent's own prompt
  *     (soul, role, system prompt, memory), nothing about Timon's folders.
+ *   - `processPerMission`: the agent's process, and every command it runs,
+ *     belongs to the one mission that launched it. False for an agent that runs
+ *     the tools of all its sessions in one long-lived process it starts with
+ *     the environment of the first launch (Hermes 0.23's gateway): whatever
+ *     identifies a mission there would reach the commands of the next ones. Such
+ *     a launch gets no mission identity, token or egress credential in its
+ *     environment (`sharedProcessEnv`), only `TIMON_SHARED_PROCESS=1`, on which
+ *     the `timon` CLI refuses to fall back to the daemon-token; the preamble
+ *     names Timon's MCP tools, which get the mission's identity per session.
  *
  * Declared on the dialect and/or the profile (`capabilities`), resolved by
  * `backendCapabilities()`: absent = true, which is what every backend did
@@ -647,13 +656,13 @@ export type SessionCapabilities = {
  * down). Images are the session's business (`SessionCapabilities.image`), not
  * `attachments`.
  */
-export const BACKEND_CAPABILITIES = ['worktree', 'timonMcp', 'attachments', 'timonPreamble'] as const;
+export const BACKEND_CAPABILITIES = ['worktree', 'timonMcp', 'attachments', 'timonPreamble', 'processPerMission'] as const;
 export type BackendCapability = (typeof BACKEND_CAPABILITIES)[number];
 export type BackendCapabilities = { readonly [K in BackendCapability]: boolean };
 
 /** Every backend that declares nothing: the behaviour before capabilities. */
 export const DEFAULT_BACKEND_CAPABILITIES: BackendCapabilities = Object.freeze({
-  worktree: true, timonMcp: true, attachments: true, timonPreamble: true,
+  worktree: true, timonMcp: true, attachments: true, timonPreamble: true, processPerMission: true,
 });
 
 /** What a caller assumes when there is no driver to ask: nothing. */
