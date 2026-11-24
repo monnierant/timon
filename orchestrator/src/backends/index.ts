@@ -10,6 +10,7 @@ import {
 import { sealMissionToken } from './mission-token-seal.js';
 import { sealFor } from './launch-seal.js';
 import { journalInjectedSecrets } from '../secrets/env.js';
+import { prepareRuntimeProfileSkill } from '../runtime-profile-skill.js';
 import { dbApi } from '../db.js';
 import { backendIdForModel, catalogBackend } from './catalog.js';
 import { baseBackendId, isAccountInstanceId, splitBackendInstance } from './instance-id.js';
@@ -153,7 +154,10 @@ function backendFromProfile({ profile, dialect, runtimeFor }: ResolvedProfile): 
       const model = opts.cfg.model ?? catalogBackend(profile.id)?.defaultModel;
       const spawn = await dialect.buildSpawn(model ? { ...opts, cfg: { ...opts.cfg, model } } : opts, runtime);
       journalInjectedSecrets({ missionId: opts.missionId, agent: opts.agentName, injected });
-      return withPassthroughEnv(spawn, dialectDeclarations(profile.dialect)?.passthroughEnv);
+      const launched = withPassthroughEnv(spawn, dialectDeclarations(profile.dialect)?.passthroughEnv);
+      // Timon's own skill in the home this process runs on, when the operator turned it on.
+      prepareRuntimeProfileSkill(dialect.runtimeProfiles, launched.env);
+      return launched;
     },
     writeUserInput: dialect.writeUserInput.bind(dialect),
     parseLine: (line: string) => stampBackend(dialect.parseLine(line), profile.id),

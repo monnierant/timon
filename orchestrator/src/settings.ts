@@ -92,6 +92,13 @@ export const SETTINGS: SettingDef[] = [
     unit: 'h', min: 1, max: 168, label: 'CLI update check interval',
     description: "Hours between two checks for newer AI CLI versions. One hour at the least.",
     advanced: true },
+  { key: 'TIMON_RUNTIME_PROFILE_SKILL', type: 'bool', default: false, group: 'Misc', owner: '@timon/backends',
+    label: "Install the timon skill in agents' program homes",
+    description: "For a provider whose agents run on a named home of their program (a Hermes profile, or Hermes' own home when "
+      + "the agent names none): at each launch, Timon writes its `timon` skill in that home's skills folder and rewrites it "
+      + "when Timon is updated, so the program can load it by name in any session, a mission or not. A copy someone edited, "
+      + "or a `timon` skill Timon did not write, is left alone. The skill grants nothing: it tells the agent how to find "
+      + "Timon's tools in a mission. Off: Timon writes nothing into those homes." },
 
   // ── Timon updates (filed under @timon/updates) ────────────────────────
   { key: 'TIMON_UPDATES_CHECK', type: 'bool', default: true, group: 'Misc', owner: '@timon/updates',

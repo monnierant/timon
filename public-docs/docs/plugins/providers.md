@@ -607,7 +607,7 @@ Decide in this order:
 | `launch(spawn, profile)` | when you own a process | Returns `cmd`, `args`, `initialStdin`, and optionally `env` and `cwd`. The daemon spawns it. |
 | `usage` | no | The account's consumption gauge: [see below](#report-the-accounts-usage). Absent means "no gauge", never zero. |
 | `models` | no | `discover(profile)`: the model IDs the CLI offers to the signed-in account. It rejects when the CLI cannot tell. |
-| `runtimeProfiles` | no | `label`, `list(profile)`, `env(name, profile)`: the named homes of the program an agent may run on ([see the ACP row](#an-acp-agent-in-one-row)). |
+| `runtimeProfiles` | no | `label`, `list(profile)`, `env(name, profile)`, optional `skills`: the named homes of the program an agent may run on ([see the ACP row](#an-acp-agent-in-one-row)). |
 | `reasoning` | no | `controls`: which thinking controls you can send for a custom model (`levels`, `budget`, `toggle`). |
 | `lifecycle` | no | `dispose(missionId)` and `enrich(event, missionId)`. |
 | `declares` | no | What the rest of Timon reads about the provider: [the table below](#register-a-provider-not-just-a-dialect). |
@@ -852,11 +852,34 @@ and to its `modelProbe`, keeps each home's model list apart (`ProfileRuntime.run
 names it), and keeps the models the agent announces there, up to 1,000: those past the
 menu's cap come back with `searchOnly: true`, which the picker's search reaches
 and its list does not, and the agent's own default with `current: true`. Timon
-never writes into a home. An agent without `runtime_profile` launches and probes
+writes into a home one thing only, and only when the operator turned on
+`TIMON_RUNTIME_PROFILE_SKILL`: its `timon` skill, in the folder an optional
+`skills` names. An agent without `runtime_profile` launches and probes
 exactly as before. A definition built on the engine declares the same object
 under `runtimeProfiles` and applies it itself: its `launch` reads
 `spawn.cfg.runtime_profile` and its `models.discover` reads
 `profile.runtimeProfile`. Requires plugin API 18.
+
+A program that loads skills by name from a folder of its home adds `skills`:
+
+```js
+runtimeProfiles: {
+  // label, list, env as above
+  skills: {
+    dir: (env) => (env.ACME_HOME ? join(env.ACME_HOME, 'skills') : join(homedir(), '.acme', 'skills')),
+    toolNames: 'In Acme, a Timon tool is named `timon.<tool>`.',  // a Markdown paragraph
+  },
+},
+```
+
+`dir` gets the whole environment of the launch, the home's variables included,
+and returns the skills folder of the home that process runs on, or `null` when
+it cannot tell without guessing. With the setting on, Timon writes
+`<dir>/timon/SKILL.md` before each launch: once, then again only when Timon's
+version changes, and never over a copy someone edited or a `timon` skill it did
+not write. `toolNames` goes into the skill: how the program names the tools of
+Timon's MCP server and how the agent loads one, never a full name that changes
+per session. A failure to write is logged and the launch goes on.
 
 An agent that announces session modes in `session/new` (`modes`, or a `mode`
 config option) can follow the agent's permission mode. `sessionModes` maps each

@@ -74,6 +74,11 @@ export function dialectProblems(dialect: unknown): string[] {
     if (homes === null || typeof homes !== 'object' || typeof homes.label !== 'string' || homes.label.trim() === ''
       || !isFunction(homes.list) || !isFunction(homes.env)) {
       problems.push('`runtimeProfiles` must be `{ label, list(profile), env(name, profile) }`: a non-empty label and two functions');
+    } else if (homes.skills !== undefined) {
+      const skills = homes.skills as Loose | null;
+      if (skills === null || typeof skills !== 'object' || !isFunction(skills.dir) || typeof skills.toolNames !== 'string' || skills.toolNames.trim() === '') {
+        problems.push('`runtimeProfiles.skills` must be `{ dir(env), toolNames }`: a function and a non-empty paragraph');
+      }
     }
   }
 

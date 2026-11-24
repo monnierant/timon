@@ -534,7 +534,8 @@ export type ProfileRuntime = {
  * The named homes one program keeps on the host, each with its own configuration, models and
  * sessions (a Hermes profile). An agent picks one (`AgentConfig.runtime_profile`, empty = the
  * program's default); the provider says which there are and what environment selects one.
- * Timon never writes into them.
+ * Timon writes into them one thing only, and only when the operator turned it on
+ * (`TIMON_RUNTIME_PROFILE_SKILL`): its own `timon` skill, in the folder `skills.dir` names.
  */
 export type RuntimeProfilesStrategy = {
   /** What the agent's field is called ("Hermes profile"). */
@@ -547,6 +548,23 @@ export type RuntimeProfilesStrategy = {
    * that is not one of the host's.
    */
   env(name: string, profile: ProfileRuntime): Record<string, string>;
+  /**
+   * Where the program finds a skill by name, so that Timon can install its own `timon` skill
+   * there (`runtime-profile-skill.ts`). Absent = the program reads no such folder.
+   */
+  readonly skills?: {
+    /**
+     * The skills folder of the home a process launched with `env` runs on (the launch's whole
+     * environment: the default home when no profile is named, the profile's otherwise), or null
+     * when it cannot be told without guessing. Never throws for a home that does not exist yet.
+     */
+    dir(env: Readonly<Record<string, string | undefined>>): string | null;
+    /**
+     * A paragraph of Markdown for the skill: how this program names the tools of Timon's MCP
+     * server in a session and how the agent loads one. Never a full tool name: it changes per session.
+     */
+    readonly toolNames: string;
+  };
 };
 
 
