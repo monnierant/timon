@@ -75,13 +75,23 @@ function cliDaemonsPath() {
 }
 
 /**
+ * A shell several missions share: the agent's process outlives its mission and
+ * runs the commands of the next ones (Hermes 0.23's gateway), so Timon put no
+ * mission identity or token in it (`sharedProcessEnv` in agent.ts).
+ */
+function inSharedProcess() {
+  return Boolean(process.env.TIMON_SHARED_PROCESS);
+}
+
+/**
  * Inside a mission the daemon-token is never a fallback: it is the operator's
  * credential, and an agent that fell back to it would be indistinguishable
  * from a terminal — no mission identity for the delegation list to apply.
- * The mission's own `TIMON_API_TOKEN` is the only credential it may use.
+ * The mission's own `TIMON_API_TOKEN` is the only credential it may use. A
+ * shared process has none, and no fallback either.
  */
 function readDaemonTokenFile() {
-  if (process.env.TIMON_MISSION_ID) return undefined;
+  if (process.env.TIMON_MISSION_ID || inSharedProcess()) return undefined;
   try {
     const t = fs.readFileSync(daemonTokenPath(), 'utf8').trim();
     return t.length > 0 ? t : undefined;
@@ -199,7 +209,7 @@ async function cmdInit(argv, remote) {
     process.stderr.write('timon init: run it on the machine where Timon is installed, without --daemon.\n');
     process.exit(64);
   }
-  if (process.env.TIMON_MISSION_ID) {
+  if (process.env.TIMON_MISSION_ID || inSharedProcess()) {
     process.stderr.write('timon init: it is for a person at a terminal, not for an agent mission.\n');
     process.exit(64);
   }
@@ -410,6 +420,15 @@ function applyDaemonTarget(spec) {
  *  spawning the Claude child. Required for /api/messages (message origin).
  *  The Bearer (4.2b) is required as soon as the daemon no longer listens on loopback. */
 function timonHeaders() {
+  if (inSharedProcess() && !API_TOKEN) {
+    // Said before the daemon answers 401 with no hint of where to go instead.
+    process.stderr.write(
+      'timon: this shell is shared by every mission of the agent (TIMON_SHARED_PROCESS), so it carries no mission\'s '
+      + 'identity or token and the CLI cannot act. Use the Timon MCP tools instead (notify, kanban_add, kanban_mark_as_done, '
+      + 'memory_rule_add, agent_send_message…).\n',
+    );
+    process.exit(2);
+  }
   const h = {};
   if (process.env.TIMON_MISSION_ID) h['X-TIMON-Mission'] = process.env.TIMON_MISSION_ID;
   if (process.env.TIMON_AGENT) h['X-TIMON-Agent'] = process.env.TIMON_AGENT;
