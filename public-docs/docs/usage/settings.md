@@ -237,9 +237,21 @@ Two more govern an autonomous mission (a Kanban task, a routine, a sub-mission) 
 - **Idle time before reap** (10 min by default, `TIMON_REAP_IDLE_MS`): the mission is ended and frees its slot once its turn has ended and nothing has been heard from it for this long.
 - **Idle time before reap, background job running** (1 h by default, `TIMON_REAP_BG_MS`): a mission whose CLI still runs a process it started, such as a test suite launched in the background, is spared past the idle time, up to this ceiling measured from the end of its turn.
 
+## Cards that wait for your answer (Permissions)
+
+A question or an Allow / Deny card an agent opens stays open until you answer it, or until its mission is stopped or its task closed. It no longer expires, and it is kept across a restart of Timon. The agent's call waits on it live for **Live wait on an unanswered card** (4 min by default, `TIMON_PERMISSION_LIVE_WAIT_MS`); past it, the agent is told you have not answered yet and ends its turn. Your answer, whenever you give it, resumes the same conversation:
+
+- **A question**: the agent gets your answer as its next message.
+- **Allow**: the agent is told it may go on, calls the tool again with the same input, and that call goes through, once, without a new card. **Allow for this session** and **Always allow** work as on any card.
+- **Deny**: the agent is told you refused, with your reason.
+
+Meanwhile, the Kanban task of that mission shows **Waiting for an answer**, and stops counting against the number of tasks run at once. A mission nobody watches (a Kanban task, a routine, a sub-mission) may ask you a question too.
+
+Set **Live wait on an unanswered card** to 0 to go back to the former behaviour described below: the call waits, cards on a mission nobody watches expire, and such a mission may not ask you a question.
+
 ## Answer deadlines on autonomous missions (Permissions)
 
-A card opened by a mission nobody is watching (a Kanban task, a routine, a sub-mission) does not wait forever: past a delay, the agent is told it got no answer and goes on without it. The card shows the time left (**Expires in 12:34**). A conversation you are having never expires. **Settings → Missions → Permissions** sets the delays:
+With **Live wait on an unanswered card** at 0, a card opened by a mission nobody is watching (a Kanban task, a routine, a sub-mission) does not wait forever: past a delay, the agent is told it got no answer and goes on without it. The card shows the time left (**Expires in 12:34**). A conversation you are having never expires. **Settings → Missions → Permissions** sets the delays:
 
 - **Delay before auto-deny (autonomous missions)** (5 min by default): an Allow / Deny card, when no phone could be notified.
 - **Delay before auto-deny (human notified)** (35 min by default): the same card, once a push notification reached one of your devices.

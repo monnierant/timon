@@ -410,6 +410,24 @@ CREATE TABLE IF NOT EXISTS approval_rules (
 CREATE INDEX IF NOT EXISTS idx_approval_rules_agent ON approval_rules(agent, owner_user_id, scope);
 CREATE INDEX IF NOT EXISTS idx_approval_rules_mission ON approval_rules(mission_id) WHERE mission_id IS NOT NULL;
 
+-- A card an agent asked for (a question or a tool approval) and nobody has
+-- answered yet. In memory alone, a daemon restart lost it, and with it the
+-- agent's question. \`parked_at\` is set once nobody waits on the card live any
+-- more: the agent was told to end its turn, and the answer resumes the mission.
+-- \`card\` is the card as the interface shows it, masked like any event.
+CREATE TABLE IF NOT EXISTS pending_cards (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  tool_use_id TEXT NOT NULL,
+  card TEXT NOT NULL,
+  input_key TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  parked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pending_cards_mission ON pending_cards(mission_id);
+
 -- Persisted settings. Only OVERRIDDEN keys are stored: a missing key means
 -- "registry default" (see settings.ts). We therefore never pre-fill the table,
 -- which lets a default evolve in the code without leaving old frozen values
@@ -2755,6 +2773,20 @@ export type ApprovalRuleRow = {
   created_at: number;
 };
 
+/** A card nobody answered yet (`pending_cards`). `card` is JSON, masked. */
+export type PendingCardRow = {
+  id: string;
+  mission_id: string;
+  agent: string;
+  tool_name: string;
+  tool_use_id: string;
+  card: string;
+  /** Digest of the tool and its unmasked input: what an Allow given later is bound to. */
+  input_key: string;
+  created_at: number;
+  parked_at: number | null;
+};
+
 export type NotificationRow = {
   id: string;
   type: NotificationType;
@@ -2873,8 +2905,10 @@ const listPendingReadyStmt = db.prepare(
 );
 const countInProgressStmt = db.prepare(
   // A mirror task can sit IN_PROGRESS forever (a card in a column elsewhere): counted, it would
-  // fill the parallelism cap and stop every real task from starting.
-  `SELECT COUNT(*) as n FROM tasks WHERE status = 'IN_PROGRESS' AND mirror = 0`,
+  // fill the parallelism cap and stop every real task from starting. A task whose mission
+  // waits for an answer (a set-aside card, `pending_cards`) runs nothing either.
+  `SELECT COUNT(*) as n FROM tasks WHERE status = 'IN_PROGRESS' AND mirror = 0
+     AND NOT EXISTS (SELECT 1 FROM pending_cards c WHERE c.mission_id = tasks.mission_id AND c.parked_at IS NOT NULL)`,
 );
 const updateTaskStatusStmt = db.prepare(
   `UPDATE tasks SET status = ?, updated_at = ?, blocked_reason = ?, blocked_reason_code = ?, done_comment = ? WHERE id = ?`,
@@ -7311,6 +7345,37 @@ export const dbApi = {
       r.session_id, r.project, r.mission_title, r.task_id, r.choices, r.origin_kind, r.origin_id, now,
     );
     return getCommandRequestStmt.get(r.id) as CommandRequestRow;
+  },
+  /** §7: the card is masked before storage, like the event that shows it. */
+  insertPendingCard(r: Omit<PendingCardRow, 'card'> & { card: unknown }): void {
+    db.prepare(
+      `INSERT OR REPLACE INTO pending_cards (id, mission_id, agent, tool_name, tool_use_id, card, input_key, created_at, parked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      r.id, r.mission_id, r.agent, r.tool_name, r.tool_use_id, JSON.stringify(redactDeep(r.card)), r.input_key,
+      r.created_at, r.parked_at,
+    );
+  },
+  parkPendingCard(id: string, at: number): void {
+    db.prepare(`UPDATE pending_cards SET parked_at = ? WHERE id = ? AND parked_at IS NULL`).run(at, id);
+  },
+  deletePendingCard(id: string): void {
+    db.prepare(`DELETE FROM pending_cards WHERE id = ?`).run(id);
+  },
+  listPendingCards(): PendingCardRow[] {
+    return db.prepare(`SELECT * FROM pending_cards ORDER BY created_at`).all() as PendingCardRow[];
+  },
+  /** A card of this mission was set aside: the mission waits for its answer. */
+  missionHasParkedCard(missionId: string): boolean {
+    return !!db.prepare(`SELECT 1 FROM pending_cards WHERE mission_id = ? AND parked_at IS NOT NULL LIMIT 1`).get(missionId);
+  },
+  missionHasPendingCard(missionId: string): boolean {
+    return !!db.prepare(`SELECT 1 FROM pending_cards WHERE mission_id = ? LIMIT 1`).get(missionId);
+  },
+  /** Missions holding a set-aside card: each one waits for its answer. */
+  missionsWaitingForAnswer(): Set<string> {
+    const rows = db.prepare(`SELECT DISTINCT mission_id FROM pending_cards WHERE parked_at IS NOT NULL`).all() as { mission_id: string }[];
+    return new Set(rows.map((r) => r.mission_id));
   },
   insertApprovalRule(r: Omit<ApprovalRuleRow, 'created_at'>): ApprovalRuleRow {
     const now = Date.now();

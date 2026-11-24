@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 
 process.env.TIMON_RESOURCE_GUARD_ENABLED = '0';
 process.env.TIMON_PERMISSION_AUTONOMOUS_TIMEOUT_MS = '400';
+// Delays apply without durable cards (ADR 0002): a durable card never expires,
+// see durable-cards.test.ts.
+process.env.TIMON_PERMISSION_LIVE_WAIT_MS = '0';
 
 const { getHost } = await import('./host/index.js');
 const {

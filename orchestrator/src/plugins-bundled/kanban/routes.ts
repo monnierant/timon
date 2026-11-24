@@ -1013,6 +1013,9 @@ export function registerRoutes(app: Router): void {
     const listChain = (rootId: string) => dbApi.listVerificationChain(rootId);
     // Only the number: the card shows a paperclip, the dialog reads the list.
     const attachmentCounts = countTaskAttachments(tasks);
+    // A task whose mission set a card aside waits for the user, not for its
+    // agent: the board shows it apart from the work in progress.
+    const waiting = dbApi.missionsWaitingForAnswer();
     // `listed`, not `all`: a todo_id filter must not hide a task's dependents.
     const withLlm = withDependents(tasks, listed).map((t) => {
       const { backend, model } = resolveTaskLlm(t, cache);
@@ -1025,6 +1028,7 @@ export function registerRoutes(app: Router): void {
         attachment_count: attachmentCounts.get(t.id) ?? 0,
         ...(runner ? { run_by: runner } : {}),
         ...(codeAwaitsMerge(t, listChain) ? { awaiting_merge: true } : {}),
+        ...(t.status === 'IN_PROGRESS' && t.mission_id && waiting.has(t.mission_id) ? { awaiting_answer: true } : {}),
         // Only on a chain merged into an integration branch: 'integrated'
         // until that branch lands, then 'landed' (or 'closed').
         ...(usesIntegrationBranch(t.integration_mode) ? { landing: chainLanding(t) } : {}),

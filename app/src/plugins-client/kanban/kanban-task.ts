@@ -61,6 +61,9 @@ export type Task = {
   run_by?: TaskRunBy | null;
   /** DONE code task whose chain never landed: its dependents wait (TIM-0109). */
   awaiting_merge?: boolean;
+  /** IN_PROGRESS task whose mission set a card aside: it waits for the user's
+   *  answer, which resumes it, and runs nothing meanwhile. */
+  awaiting_answer?: boolean;
   /** TO DO idea the task carries out; its tags show on the card. */
   todo_id?: number | null;
   /** Files attached to the task; the list itself is read by the dialog. */
