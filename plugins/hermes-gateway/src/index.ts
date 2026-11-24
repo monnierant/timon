@@ -51,6 +51,7 @@ export function apply(ctx: PluginContext): void {
     fetch,
     resolveTarget: (launch, model) => resolveTarget(ctx.connections, typeId, launch, model),
     log: { info: (m) => ctx.log.info(m), warn: (m) => ctx.log.warn(m) },
+    mcp: ctx.mcp,
   }));
   ctx.backends.registerProfile({
     id: PROFILE_ID,

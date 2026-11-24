@@ -36,6 +36,7 @@ Timon accepts plain `http://` only for an address on your own machine, your loca
 2. In **Settings → Secrets → Connections**, choose **Add a connection** and pick **Hermes Gateway**:
    - the gateway's address (`https://…`, or `http://…` for a local or Tailscale address, with *This service is on my machine or local network* ticked);
    - **Hermes profile**: leave it empty for the default profile, or give the profile name;
+   - **Timon address for remote tools**: leave it empty unless you want the agents of this gateway to use a few Timon tools (see [Timon's tools on a remote gateway](#timons-tools-on-a-remote-gateway));
    - **API server key**: the `API_SERVER_KEY` of that profile.
 
    Add one connection per Hermes profile you want in Timon, and per gateway if you run several.
@@ -59,6 +60,18 @@ An agent tied to one gateway serves **your account only**: anyone else who talks
 
 To change a gateway's address, profile, key or *local network* setting, choose **Edit** on its connection in **Settings → Secrets → Connections**. The form opens with its current values, except the key: leave **API server key** empty to keep the current one, or type the new key to replace it. A new address (another host or port) or a change of *local network* waits for an administrator's approval again, and the form says so before you save; a new profile or path on the same address does not.
 
+## Timon's tools on a remote gateway
+
+Every answer Timon asks of Hermes names its **mission**: an agent that runs on the same machine as Timon can use it to reach Timon with that machine's own tools.
+
+A gateway on **another machine** can get a few Timon tools too, if you give its connection a **Timon address**: the address where that machine reaches Timon's daemon, not the web app (your Tailscale name, `https://<machine>.<tailnet>.ts.net`, an SSH tunnel such as `http://127.0.0.1:8765`, or a reverse proxy). It is empty, hence off, by default. When it is set, each answer Hermes gives on a mission receives, in its instructions, a token that opens Timon's [remote MCP endpoint](../plugins/remote-mcp.md) for four tools only: mark its Kanban task done (with its result) or failed, write to another agent, and list the agents. The token works for that answer only, and only for that mission.
+
+Before turning it on:
+
+- The token is **written into Hermes' instructions**, so it is kept in that conversation's history on the gateway. Anyone who can read the gateway's sessions can use it while the answer goes on. Turn it on only for a gateway you trust as much as Timon.
+- The gateway's machine must reach that address; Timon itself never calls it.
+- The plugin lists the permission to issue remote MCP tokens (`mcp:issue`) among its permissions. It issues a token only for a mission that runs on one of its agents, and only when the connection gives an address.
+
 ## What works
 
 - Replies stream into the chat, tool calls appear with a short preview of what they did, and sub-agents Hermes starts show as their own cards.
@@ -72,10 +85,10 @@ To change a gateway's address, profile, key or *local network* setting, choose *
 
 ## What does not work
 
-- **Closing a Kanban task.** A task other than code runs, and Hermes' answer stays in its mission, but a Hermes agent cannot mark the task done or write its report: Timon closes it as done once the mission has been idle for a while, with a note that the agent reported nothing.
+- **Closing a Kanban task**, unless the connection has a Timon address. A task other than code runs, and Hermes' answer stays in its mission; without the remote tools, a Hermes agent cannot mark the task done or write its report: Timon closes it as done once the mission has been idle for a while, with a note that the agent reported nothing.
 - **Code tasks.** A Hermes agent works on the gateway's machine, not in Timon's folder: a Kanban task of type `code` or `merge` assigned to it is blocked with the reason.
 - **Attached files.** Hermes would drop them without a word, so Timon refuses the message instead. Images are not sent either: the chat says so.
-- **Timon's tools.** Kanban, messages to other agents and memory are not available to Hermes agents: Hermes loads its tools from its own configuration, and has no way to receive a per-mission access to Timon.
+- **Timon's other tools.** Memory, the browser, scheduling and the rest of Timon's tools are not available to Hermes agents: Hermes loads its tools from its own configuration. With a Timon address, only the four tools above are reachable.
 - **"Allow for the session" or "always allow".** The card allows or refuses one command at a time.
 - **Missions with no account behind them**, such as a Kanban task nobody owns or a routine: there is no account, hence no gateway, to run them on.
 - **The model** is chosen in Hermes, per profile, not in Timon.

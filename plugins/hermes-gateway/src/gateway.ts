@@ -18,6 +18,9 @@ export type GatewayTarget = {
   readonly key: string;
   /** `X-Hermes-Session-Key`: Hermes keeps one memory per value. */
   readonly sessionKey: string | null;
+  /** Where this gateway's agents reach Timon's remote MCP endpoint, when the
+   *  connection turns that on (`timonUrl`); absent or null = off. */
+  readonly timonUrl?: string | null;
 };
 
 /** Hermes 0.21.0 (2026-08-31): durable idempotency, steer, approvals by request id. */

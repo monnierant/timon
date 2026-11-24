@@ -40,21 +40,56 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+export type ConnectionConfig = { profile?: string; timonUrl?: string };
+
 /** Same contract as a Zod schema: the clean config, or a throw. */
 export const configSchema = {
-  parse(value: unknown): { profile?: string } {
+  parse(value: unknown): ConnectionConfig {
     const object = record(value);
     if (!object) throw new Error('Expected an object');
-    const { profile, ...rest } = object;
+    const { profile, timonUrl, ...rest } = object;
     if (Object.keys(rest).length > 0) throw new Error('Unknown field');
-    if (profile === undefined || profile === null || profile === '') return {};
-    if (typeof profile !== 'string') throw new Error('Invalid profile');
-    const name = profile.trim();
-    if (!name || name === DEFAULT_PROFILE) return {};
-    if (!PROFILE_RE.test(name)) throw new Error('A profile name is letters, digits, ".", "_" or "-"');
-    return { profile: name };
+    const name = parseProfile(profile);
+    const address = parseTimonUrl(timonUrl);
+    return { ...(name ? { profile: name } : {}), ...(address ? { timonUrl: address } : {}) };
   },
 };
+
+function parseProfile(profile: unknown): string | null {
+  if (profile === undefined || profile === null || profile === '') return null;
+  if (typeof profile !== 'string') throw new Error('Invalid profile');
+  const name = profile.trim();
+  if (!name || name === DEFAULT_PROFILE) return null;
+  if (!PROFILE_RE.test(name)) throw new Error('A profile name is letters, digits, ".", "_" or "-"');
+  return name;
+}
+
+/**
+ * The address where the gateway's agents reach Timon (a Tailscale name, an SSH
+ * tunnel, a reverse proxy). Empty = the remote tools are off. Timon never
+ * calls it: it is only written into the runs' instructions.
+ */
+function parseTimonUrl(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new Error('Invalid Timon address');
+  const text = value.trim();
+  if (!text) return null;
+  let url: URL;
+  try { url = new URL(text); } catch { throw new Error('The Timon address is a full http(s) URL'); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('The Timon address is a full http(s) URL');
+  if (url.username || url.password) throw new Error('The Timon address carries no user name or password');
+  if (url.search || url.hash || text.includes('?') || text.includes('#')) throw new Error('The Timon address has no query and no fragment');
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+/** The connection's Timon address, or null when its remote tools are off. */
+export function connectionTimonUrl(connection: Pick<PluginUserConnection, 'config'>): string | null {
+  try {
+    return parseTimonUrl(connection.config.timonUrl);
+  } catch {
+    return null;
+  }
+}
 
 /** The Hermes profile a connection reaches. */
 export function connectionProfile(connection: Pick<PluginUserConnection, 'config'>): string {
@@ -189,7 +224,7 @@ export async function resolveTarget(
   if (!key) throw new UserFacingError('Your Hermes gateway connection has no API key: set it in Settings › Secrets › Connections.');
   const profile = connectionProfile(pick);
   const { root, base } = targetUrls(pick.url, profile);
-  return { root, base, profile, key, sessionKey: sessionKeyFor(owner) };
+  return { root, base, profile, key, sessionKey: sessionKeyFor(owner), timonUrl: connectionTimonUrl(pick) };
 }
 
 /** The connection type users fill in, with its "Test" button. */
@@ -198,9 +233,17 @@ export function connectionType(): PluginConnectionTypeDefinition {
     name: TYPE_NAME,
     version: TYPE_VERSION,
     label: 'Hermes Gateway',
-    description: 'A Hermes gateway API server (Hermes 0.21.0 or later). One connection per Hermes profile; a profile has its own key.',
+    description: 'A Hermes gateway API server (Hermes 0.21.0 or later). One connection per Hermes profile; a profile has its own key. '
+      + 'A Timon address gives its agents a few Timon tools, with a token written into each run\'s instructions.',
     configSchema,
-    fields: [{ key: 'profile', label: 'Hermes profile (empty: default)', placeholder: DEFAULT_PROFILE }],
+    fields: [
+      { key: 'profile', label: 'Hermes profile (empty: default)', placeholder: DEFAULT_PROFILE },
+      {
+        key: 'timonUrl',
+        label: 'Timon address for remote tools (empty: off)',
+        placeholder: 'https://timon.your-tailnet.ts.net',
+      },
+    ],
     secrets: [{ name: SECRET_KEY, label: 'API server key (API_SERVER_KEY)', required: true }],
     timeoutMs: 15_000,
     async test(context) {

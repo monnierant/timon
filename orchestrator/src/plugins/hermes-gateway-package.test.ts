@@ -37,6 +37,8 @@ import { backendCapabilities } from '../backends/capabilities.js';
 import { catalogClaimsModel } from '../backends/catalog.js';
 import type { BuildSpawnOpts, NormalizedEvent } from '../backends/types.js';
 import type { PluginUserConnection } from './integration-types.js';
+import { createDaemonAuthMiddleware } from '../plugins-bundled/http/auth.js';
+import { registerRemoteMcpRoutes } from '../remote-mcp/routes.js';
 
 const PACKAGE = fileURLToPath(new URL('../../../plugins/hermes-gateway', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(PACKAGE, 'package.json'), 'utf8')) as { name: string; main: string; exports: Record<string, string>; timon: unknown };
@@ -59,14 +61,14 @@ const { startFakeGateway } = await import('../../../plugins/hermes-gateway/test/
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const stop of cleanup.splice(0).reverse()) await stop(); });
 
-test('the manifest asks for the remote backend, connection, outbound and agent permissions only', () => {
+test('the manifest asks for the remote backend, connection, outbound, agent and remote MCP token permissions only', () => {
   const manifest = PluginManifestSchema.parse(pkg.timon);
   assert.equal(pkg.name, '@timon-ai/plugin-hermes-gateway');
   assert.equal(pkg.main, 'lib/index.js');
   assert.equal(pkg.exports['./client'], './lib/client.js');
   assert.equal(manifest.id, 'hermes-gateway');
   assert.equal(manifest.apiVersion, 7);
-  assert.deepEqual([...manifest.permissions].sort(), ['agents:manage', 'backends:register', 'connections:register', 'connections:users:read', 'http:outbound']);
+  assert.deepEqual([...manifest.permissions].sort(), ['agents:manage', 'backends:register', 'connections:register', 'connections:users:read', 'http:outbound', 'mcp:issue']);
   assert.deepEqual(manifest.client?.slots, ['settings.section']);
   assert.equal(manifest.license.required, false);
 });
@@ -229,6 +231,58 @@ test('a skill checked on a gateway agent reaches the gateway as its body, not as
   assert.ok(instructions.includes('GATEWAY SKILL BODY'), 'what the gateway receives carries the procedure');
   assert.ok(!instructions.includes('skill_get'), 'a tool it was not handed');
   assert.ok(!instructions.includes('SKILL.md'), 'a file it cannot open');
+});
+
+test('end to end: with a Timon address, a turn hands the agent a token the remote MCP endpoint takes, for the named tools only, until the turn ends', async () => {
+  const { service } = await loaded();
+  const gw = await startFakeGateway();
+  cleanup.push(() => gw.close());
+  const ada = account('ada');
+  await service.create({ userId: ada, isAdmin: true }, {
+    type: 'hermes-gateway:gateway@1', label: 'Ada\'s remote Hermes', url: gw.url, allowPrivateNetwork: true,
+    config: { timonUrl: 'https://timon.example.ts.net' }, secrets: { apiKey: 'gateway-default-key-0001' },
+  });
+  upsertAgent({ name: 'hermes.wayback', system_prompt: 'Witness.', config: { backend: 'hermes-gateway', model: 'hermes/default', memory_scope: 'NONE' } });
+  const missionId = `hermes-e2e-${randomUUID().slice(0, 8)}`;
+  dbApi.createMission(missionId, 'hermes.wayback', 'hello', undefined, ada);
+  const backend = getBackend('hermes-gateway');
+  const driver = backend.openRemoteSession!({
+    spawn: { agentName: 'hermes.wayback', systemPrompt: 'Witness.', message: 'hello', resumeSession: null, cfg: { model: 'hermes/default' }, missionId } as unknown as BuildSpawnOpts,
+    host: { emit: () => undefined, requestPermission: async () => ({ allow: false }), end: () => undefined, saveResume: () => undefined },
+  });
+  await driver.start();
+  const pending = driver.prompt('slow please');
+  const run = async () => { for (let i = 0; i < 500; i++) { const r = [...gw.runs.values()].at(-1); if (r) return r; await new Promise((ok) => setTimeout(ok, 10)); } throw new Error('no run'); };
+  const instructions = (await run()).body.instructions ?? '';
+  assert.ok(instructions.includes(`Timon mission \`${missionId}\``));
+  assert.ok(instructions.includes('POST https://timon.example.ts.net/api/remote-mcp'));
+  const token = /Authorization: Bearer (tmcp_\S+)/.exec(instructions)?.[1];
+  assert.ok(token, 'a remote MCP token, issued through the real ctx.mcp');
+
+  // The daemon's own endpoint, behind its real auth middleware.
+  const app = express();
+  app.use(createDaemonAuthMiddleware({ token: 'd'.repeat(64), required: true }));
+  app.use(express.json());
+  registerRemoteMcpRoutes(app);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/remote-mcp`;
+  const rpc = (body: unknown) => fetch(endpoint, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body),
+  });
+  const list = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  assert.equal(list.status, 200);
+  const tools = ((await list.json()) as { result: { tools: Array<{ name: string }> } }).result.tools.map((t) => t.name).sort();
+  assert.deepEqual(tools, ['agent_list', 'agent_send_message', 'kanban_mark_as_done', 'kanban_mark_as_failed']);
+  const outside = (await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'mission_spawn', arguments: {} } })).json()) as { error?: { message: string } };
+  assert.match(outside.error?.message ?? '', /outside this token's scopes/);
+
+  await driver.cancel();
+  await pending;
+  await new Promise((ok) => setTimeout(ok, 50));
+  assert.equal((await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/list' })).status, 401, 'revoked with its turn');
+  driver.close();
 });
 
 test('creating the agents: an agent manager may — the backend starts nothing here — an account without agents:manage may not', async () => {
