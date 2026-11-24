@@ -24,4 +24,6 @@ export type ProviderAgentConfig = {
   project?: string;
   /** undefined inherits; null disables browsing; an id is an explicit assignment. */
   browser_profile_id?: string | null;
+  /** The named home of the program the agent runs on (`RuntimeProfilesStrategy`), absent = its default. */
+  runtime_profile?: string;
 };

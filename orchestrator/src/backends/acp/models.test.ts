@@ -120,6 +120,32 @@ test('Hermes shape: 83 models are bounded and sorted, and the ones the profile n
   assert.ok(!ids.includes('unlisted'), 'a kept id the agent does not list is not invented');
 });
 
+test('keepBeyondCap: the ids past the cap come back too, marked search-only, and the menu keeps its 60', async () => {
+  forgetAcpModels();
+  const all = Array.from({ length: 83 }, (_, i) => `provider/model-${String(i).padStart(2, '0')}`);
+  const agent = inlineAgent(`{ sessionId: 's', models: { currentModelId: 'provider/model-80', availableModels: ${JSON.stringify(all.map((modelId) => ({ modelId })))} } }`);
+  const found = await discoverAcpModels(probeOf({ args: [agent], profileId: 'hermes', runtimeProfile: 'alpha', keepBeyondCap: true }));
+  assert.equal(found.length, 83, 'every model the agent announced');
+  assert.equal(found.filter((m) => !m.searchOnly).length, MAX_DISCOVERED_MODELS, 'the menu keeps its cap');
+  assert.ok(!found.find((m) => m.slug === 'provider/model-80')!.searchOnly, 'the current model stays in the menu');
+  assert.deepEqual(found.filter((m) => m.current).map((m) => m.slug), ['provider/model-80'], 'the model the agent runs by default is named');
+  assert.ok(found.find((m) => m.slug === 'provider/model-79')!.searchOnly, 'a model past the cap is reached by the search only');
+  assert.deepEqual(found.map((m) => m.slug), [...all].sort(), 'sorted, nothing invented');
+});
+
+test('the cache keeps one answer per runtime profile of the same program', async () => {
+  forgetAcpModels();
+  const agent = inlineAgent(`{ sessionId: 's', models: { currentModelId: 'm', availableModels: [{ modelId: 'from-' + (process.env.ACME_HOME || 'default') }] } }`);
+  const ask = (runtimeProfile?: string) => discoverAcpModels(probeOf({
+    args: [agent], profileId: 'hermes', ...(runtimeProfile ? { runtimeProfile } : {}),
+    env: { ...process.env, ...(runtimeProfile ? { ACME_HOME: runtimeProfile } : {}) },
+  }));
+  assert.deepEqual((await ask()).map((m) => m.slug), ['from-default']);
+  assert.deepEqual((await ask('alpha')).map((m) => m.slug), ['from-alpha']);
+  assert.deepEqual((await ask('beta')).map((m) => m.slug), ['from-beta']);
+  assert.deepEqual((await ask()).map((m) => m.slug), ['from-default'], 'the default answer was not replaced');
+});
+
 test('selectModels: deduplicates, drops unusable ids, and stays sorted', () => {
   assert.deepEqual(selectModels(['b', 'a', 'b', '', 42, 'x'.repeat(500), 'c\nd', null]), ['a', 'b']);
   assert.equal(selectModels(Array.from({ length: 10 }, (_, i) => `m${i}`), [], 3).length, 3);

@@ -7,14 +7,38 @@
  * two parameters the browser's store keys its cache on.
  */
 
-export type CatalogTarget = { project?: string | null; agent?: string | null };
+export type CatalogTarget = {
+  project?: string | null;
+  agent?: string | null;
+  /** The runtime profile (a Hermes profile) the agent editor holds before it is saved, on
+   *  its backend: that backend then carries the profile's list. `name: ''` is the default.
+   *  Absent: the agent's saved one, read by the daemon. */
+  runtimeProfile?: { backend: string; name: string } | null;
+};
 
-/** `project=…&agent=…`, or `''` for the whole inventory. Nothing else gets through. */
+/** `project=…&agent=…&runtimeProfile=…&runtimeProfileBackend=…`, or `''` for the whole
+ *  inventory. Nothing else gets through. */
 export function catalogTargetQuery(target: CatalogTarget | null | undefined): string {
   const query = new URLSearchParams();
   const project = target?.project?.trim();
   const agent = target?.agent?.trim();
   if (project) query.set('project', project);
   if (agent) query.set('agent', agent);
+  const draft = target?.runtimeProfile;
+  if (draft && draft.backend.trim()) {
+    query.set('runtimeProfile', draft.name.trim());
+    query.set('runtimeProfileBackend', draft.backend.trim());
+  }
   return query.toString();
+}
+
+/** The `CatalogTarget` a query string of `catalogTargetQuery` came from (the Next route forwards it). */
+export function catalogTargetOf(params: URLSearchParams): CatalogTarget {
+  const name = params.get('runtimeProfile');
+  const backend = params.get('runtimeProfileBackend');
+  return {
+    project: params.get('project'),
+    agent: params.get('agent'),
+    ...(name !== null && backend ? { runtimeProfile: { backend, name } } : {}),
+  };
 }

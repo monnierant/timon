@@ -1,6 +1,6 @@
 export type {
   LaunchStrategy, LifecycleStrategy, LimitsStrategy, LinesCodec, McpStrategy, ModelsStrategy, NativeProviderDefinition,
-  PermissionStrategy, ProcessDriverCodec, ProviderDefinition, ReasoningStrategy,
+  PermissionStrategy, ProcessDriverCodec, ProviderDefinition, ReasoningStrategy, RuntimeProfilesStrategy,
   ProcessProviderDefinition, ProviderTransportKind, RemoteDriverCodec, RemoteProviderDefinition, SessionStrategy, UsageStrategy,
 } from './definition.js';
 export { isRemoteDefinition, PROVIDER_TRANSPORTS } from './definition.js';

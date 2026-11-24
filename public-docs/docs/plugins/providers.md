@@ -607,6 +607,7 @@ Decide in this order:
 | `launch(spawn, profile)` | when you own a process | Returns `cmd`, `args`, `initialStdin`, and optionally `env` and `cwd`. The daemon spawns it. |
 | `usage` | no | The account's consumption gauge: [see below](#report-the-accounts-usage). Absent means "no gauge", never zero. |
 | `models` | no | `discover(profile)`: the model IDs the CLI offers to the signed-in account. It rejects when the CLI cannot tell. |
+| `runtimeProfiles` | no | `label`, `list(profile)`, `env(name, profile)`: the named homes of the program an agent may run on ([see the ACP row](#an-acp-agent-in-one-row)). |
 | `reasoning` | no | `controls`: which thinking controls you can send for a custom model (`levels`, `budget`, `toggle`). |
 | `lifecycle` | no | `dispose(missionId)` and `enrich(event, missionId)`. |
 | `declares` | no | What the rest of Timon reads about the provider: [the table below](#register-a-provider-not-just-a-dialect). |
@@ -829,6 +830,33 @@ reads when the agent asks to sign in. `authenticateWith` must name a method the
 agent announced, and is never tried ahead of time because a method can open a
 browser. `modelProbe` costs an empty session in the agent's own history; Timon
 caches the answer for 12 hours.
+
+A program that keeps several named homes on the host, each with its own
+configuration, sign-in and models (Hermes' profiles), declares them with
+`runtimeProfiles`. The agent editor then offers a profile field for agents on
+that provider, stored as the agent's `runtime_profile` (empty = the program's
+default home):
+
+```js
+runtimeProfiles: {
+  label: 'Acme profile',                        // the field's label in the agent editor
+  list: async (profile) => listAcmeHomes(profile.env),       // names on this host, sorted
+  env: (name, profile) => ({ ACME_HOME: acmeHomeOf(name, profile.env) }),
+},
+```
+
+`list` reads the host and returns names only. `env` returns the variables that
+select one home; it throws when the name is not one of them, and the launch
+stops with that message. Timon adds `env(name, profile)` to the agent's launches
+and to its `modelProbe`, keeps each home's model list apart (`ProfileRuntime.runtimeProfile`
+names it), and keeps the models the agent announces there, up to 1,000: those past the
+menu's cap come back with `searchOnly: true`, which the picker's search reaches
+and its list does not, and the agent's own default with `current: true`. Timon
+never writes into a home. An agent without `runtime_profile` launches and probes
+exactly as before. A definition built on the engine declares the same object
+under `runtimeProfiles` and applies it itself: its `launch` reads
+`spawn.cfg.runtime_profile` and its `models.discover` reads
+`profile.runtimeProfile`. Requires plugin API 18.
 
 An agent that announces session modes in `session/new` (`modes`, or a `mode`
 config option) can follow the agent's permission mode. `sessionModes` maps each

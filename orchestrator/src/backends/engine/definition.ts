@@ -12,7 +12,7 @@
 
 import type {
   AccountUsage, BuildSpawnOpts, DiscoveredModel, NormalizedEvent, ImageAttachment, PermissionModel, ProfileRuntime,
-  RateLimitReporting, RemoteSessionOpenArgs, SessionDriver, SessionOpenArgs, SessionStdio, SessionStore, SpanOp,
+  RateLimitReporting, RemoteSessionOpenArgs, RuntimeProfilesStrategy, SessionDriver, SessionOpenArgs, SessionStdio, SessionStore, SpanOp,
   SpanState, SpawnResult, UsageProbeOptions,
 } from '../types.js';
 import type { ReasoningControl } from '../reasoning-control.js';
@@ -139,6 +139,8 @@ export type UsageStrategy = {
   probe(profile?: ProfileRuntime, options?: UsageProbeOptions): Promise<AccountUsage | null>;
 };
 
+export type { RuntimeProfilesStrategy };
+
 /** Model ids the CLI itself says this account may use; rejects when it cannot tell. Never opens a session to ask. */
 export type ModelsStrategy = {
   discover(profile: ProfileRuntime): Promise<Array<string | DiscoveredModel>>;
@@ -168,6 +170,8 @@ type ProviderCommon = {
   readonly mcp: McpStrategy;
   readonly usage?: UsageStrategy;
   readonly models?: ModelsStrategy;
+  /** Named homes of the program an agent may run on (`AgentConfig.runtime_profile`). */
+  readonly runtimeProfiles?: RuntimeProfilesStrategy;
   readonly reasoning?: ReasoningStrategy;
   readonly lifecycle?: LifecycleStrategy;
   /** Trace spans an event opens or closes; absent = the provider is not traced. A native provider declares them in `declares.spans`. */

@@ -51,9 +51,12 @@ export function modelIdsFromSessionNew(result: unknown): string[] {
  * treats an empty answer as a failure, so a provider whose probe finds nothing
  * should reject rather than resolve `[]`.)
  */
+/** A discovered model as the probes return it (`DiscoveredModel` of `types.ts`, kept local: this file is a leaf). */
+type NormalizedModel = { slug: string; supportedReasoningLevels?: string[]; searchOnly?: boolean; current?: boolean };
+
 export function normalizeDiscoveredModels(
-  found: ReadonlyArray<string | { slug: string; supportedReasoningLevels?: string[] }>,
-): Array<{ slug: string; supportedReasoningLevels?: string[] }> {
+  found: ReadonlyArray<string | NormalizedModel>,
+): NormalizedModel[] {
   return found
     .map((m) => (typeof m === 'string' ? { slug: m } : m))
     .filter((m) => typeof m.slug === 'string' && m.slug.length > 0);

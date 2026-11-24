@@ -53,6 +53,9 @@ export type CatalogModel = {
   /** Icon picked by the user: an emoji, or an image served by our own upload
    *  route. Wins over everything else. */
   icon?: string;
+  /** Announced by the agent past the menu's cap, in a runtime profile's list (a
+   *  Hermes profile): the search finds it, the provider's list does not show it. */
+  searchOnly?: boolean;
 };
 
 /** One way of setting a model's thinking (mirror of `ReasoningControl`). */
@@ -100,6 +103,9 @@ export const DEFAULT_BACKEND_CAPABILITIES: BackendCapabilities = Object.freeze({
 export type CatalogBackend = {
   id: BackendName;
   label: string;
+  /** The runtime profile (a Hermes profile) whose list `models` is, when the catalogue
+   *  was read for an agent that runs on one (`CatalogTarget.runtimeProfile`). */
+  runtimeProfile?: string;
   /** Name of the PROVIDER ("Anthropic", "xAI"…), shown in the left column of
    *  the LLM selector. Distinct from `label`, which names the product or the
    *  CLI. Absent → fall back on `label`. */

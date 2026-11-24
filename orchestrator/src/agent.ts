@@ -3171,7 +3171,7 @@ export async function setMissionModel(
   // attributes to an OTHER backend (switching a claude mission to
   // `gpt-5.5` would kill it on the next spawn). A slug unknown to the
   // catalog goes through — it's the CLI's call, not ours to guess.
-  if (!catalogClaimsModel(backendName, model) && backendForModel(model)) {
+  if (!catalogClaimsModel(backendName, model, cfg.runtime_profile) && backendForModel(model)) {
     throw new Error(
       `model "${model}" does not belong to backend ${backendName} ` +
       `(claimed by ${backendForModel(model)})`,
@@ -4782,6 +4782,8 @@ export function startReaper(intervalMs = REAP_INTERVAL_MS()): () => void {
 
 export type AgentSummary = {
   browser_profile_id?: string | null;
+  /** Named home of the program its backend runs (a Hermes profile); absent = the default. */
+  runtime_profile?: string;
   name: string;
   reports_to?: string | null;
   /** Team id, or null/undefined when the agent belongs to no team. */
@@ -4841,6 +4843,7 @@ export function getAgent(name: string): AgentDetails | null {
     backend: cfg.backend ?? defaultBackendName(),
     cwd: cfg.cwd ?? null,
     browser_profile_id: cfg.browser_profile_id,
+    ...(cfg.runtime_profile ? { runtime_profile: cfg.runtime_profile } : {}),
     model: cfg.model ?? null,
     permission_mode: cfg.permission_mode ?? null,
     allowed_tools: cfg.allowed_tools ?? [],
@@ -4959,10 +4962,14 @@ export function upsertAgent(input: {
     // them would take the delegation rights away without anyone asking.
     // The mascot look and the avatar mode are picked elsewhere too
     // (onboarding, the Avatar tab, `agent_update look`, `agent_set_look`).
-    for (const key of ['reports_to', 'team', 'orchestrator', 'orchestrates', 'directives', 'created_by', 'uid', 'look', 'avatar'] as const) {
+    // The runtime profile (a Hermes profile) too: a writer that does not know the field
+    // must not move the agent to its program's default home.
+    for (const key of ['reports_to', 'team', 'orchestrator', 'orchestrates', 'directives', 'created_by', 'uid', 'look', 'avatar', 'runtime_profile'] as const) {
       if (!(key in config) && current[key] !== undefined) (config as Record<string, unknown>)[key] = current[key];
     }
   }
+  // Sent empty (or null): back to the default, said by leaving the field out.
+  if (!config.runtime_profile) delete config.runtime_profile;
   settleLook(config, before?.config.look);
   settleAvatar(config);
   // No roleless agents. A FRESH agent created without an explicit role —
@@ -5875,6 +5882,7 @@ export function listAgents(): AgentSummary[] {
       backend: cfg.backend ?? implicitBackendName(),
       cwd: cfg.cwd ?? null,
       browser_profile_id: cfg.browser_profile_id,
+      ...(cfg.runtime_profile ? { runtime_profile: cfg.runtime_profile } : {}),
       model: cfg.model ?? null,
       permission_mode: cfg.permission_mode ?? null,
       allowed_tools: cfg.allowed_tools ?? [],

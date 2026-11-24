@@ -67,6 +67,12 @@
 
 ***
 
+### runtimeProfiles?
+
+> `readonly` `optional` **runtimeProfiles?**: [`RuntimeProfilesStrategy`](RuntimeProfilesStrategy.md)
+
+***
+
 ### sessionModes?
 
 > `readonly` `optional` **sessionModes?**: `Readonly`\<`Partial`\<`Record`\<[`PermissionMode`](PermissionMode.md), `string`\>\>\>

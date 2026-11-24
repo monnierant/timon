@@ -26,7 +26,7 @@ import { serializeAcpMcpServers } from '../mcp-serialize.js';
 import type { ProviderDeclarations, ProviderBinaryDeclaration } from '../provider-declarations.js';
 import type { ProviderMcpOptions, ProviderMcpPlan } from '../provider-services.js';
 import type { BuildSpawnOpts } from '../types.js';
-import type { ModelsStrategy, ProcessDriverCodec } from '../engine/definition.js';
+import type { ModelsStrategy, ProcessDriverCodec, RuntimeProfilesStrategy } from '../engine/definition.js';
 import { AcpSessionDriver } from './driver.js';
 import { discoverAcpModels } from './models.js';
 import type { AcpConversation } from './conversation-transport.js';
@@ -69,6 +69,12 @@ export type AcpAgentSpec = {
    * own history — hence a 12 h cache and a start in Timon's home, not in a project.
    */
   readonly modelProbe?: 'session-new';
+  /**
+   * Named homes of the agent program (a Hermes profile). An agent that names one
+   * (`runtime_profile`) runs with `env(name, profile)` on top of the profile's
+   * environment, and a `modelProbe` for it runs there too, its answer kept apart.
+   */
+  readonly runtimeProfiles?: RuntimeProfilesStrategy;
   /** Environment for the agent's process, on top of the profile's. */
   env?(spawn: BuildSpawnOpts): Record<string, string>;
   /**
@@ -125,18 +131,25 @@ function modelsOf(services: AcpProviderServices, spec: AcpAgentSpec): ModelsStra
   const { binary } = services;
   if (!binary) throw new Error(`provider \`${spec.id}\`: \`modelProbe\` needs \`services.binary\` (pass \`ctx.provider\`)`);
   return {
-    discover: (profile) => discoverAcpModels({
-      // The profile's own command when the manifest declared it, the canonical name otherwise.
-      open: () => binary.converse(
-        spec.binary.names.includes(profile.cmd) ? profile.cmd : spec.binary.names[0]!, spec.args,
-        { env: profile.env, timeoutMs: PROBE_CONVERSATION_MS },
-      ),
-      command: profile.cmd,
-      profileId: profile.id,
-      ...(spec.signIn ? { signIn: spec.signIn } : {}),
-      ...(spec.authenticateWith ? { authenticateWith: spec.authenticateWith } : {}),
-      keep: profile.knownModels,
-    }),
+    discover: async (profile) => {
+      // For a runtime profile: that home's environment, its own cache entry, and the whole
+      // list, the models past the menu's cap marked for the search.
+      const home = profile.runtimeProfile && spec.runtimeProfiles ? profile.runtimeProfile : undefined;
+      const env = home ? { ...profile.env, ...spec.runtimeProfiles!.env(home, profile) } : profile.env;
+      return discoverAcpModels({
+        // The profile's own command when the manifest declared it, the canonical name otherwise.
+        open: () => binary.converse(
+          spec.binary.names.includes(profile.cmd) ? profile.cmd : spec.binary.names[0]!, spec.args,
+          { env, timeoutMs: PROBE_CONVERSATION_MS },
+        ),
+        command: profile.cmd,
+        profileId: profile.id,
+        ...(home ? { runtimeProfile: home, keepBeyondCap: true } : {}),
+        ...(spec.signIn ? { signIn: spec.signIn } : {}),
+        ...(spec.authenticateWith ? { authenticateWith: spec.authenticateWith } : {}),
+        keep: profile.knownModels,
+      });
+    },
   };
 }
 
@@ -221,7 +234,13 @@ export function defineProvider(services: AcpProviderServices, spec: AcpAgentSpec
       cmd: profile.cmd,
       args: [...spec.args],
       cwd: spawn.cfg.cwd,
-      env: { ...profile.env, ...(spec.env?.(spawn) ?? {}), ...(spawn.oneShot ? spec.oneShotEnv : undefined) },
+      env: {
+        ...profile.env,
+        // The agent's runtime profile: the home the program reads, over the daemon's own.
+        ...(spec.runtimeProfiles && spawn.cfg.runtime_profile ? spec.runtimeProfiles.env(spawn.cfg.runtime_profile, profile) : {}),
+        ...(spec.env?.(spawn) ?? {}),
+        ...(spawn.oneShot ? spec.oneShotEnv : undefined),
+      },
       // The driver writes the handshake; the system prompt and the first message travel through the session.
       initialStdin: null,
     }),
@@ -240,6 +259,7 @@ export function defineProvider(services: AcpProviderServices, spec: AcpAgentSpec
       },
     },
     ...(models ? { models } : {}),
+    ...(spec.runtimeProfiles ? { runtimeProfiles: spec.runtimeProfiles } : {}),
     declares: { ...spec.declares, binary: spec.binary, spans: 'stream-json' },
   };
 }

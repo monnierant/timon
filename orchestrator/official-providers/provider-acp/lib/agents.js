@@ -21,6 +21,7 @@ import { randomBytes } from 'node:crypto';
 import { manifestBackend } from './manifest.js';
 import { oneShotOverlay } from './opencode-config.js';
 import { createAntigravityUsage } from './antigravity-usage.js';
+import { hermesProfiles } from './hermes-profiles.js';
 
 const OPENCODE = manifestBackend('opencode');
 const HERMES = manifestBackend('hermes');
@@ -191,6 +192,8 @@ export const ACP_AGENTS = Object.freeze([
     args: [],
     permissionsByAgent: false,
     modelProbe: 'session-new',
+    // An agent may name one of the host's Hermes profiles: its missions and its model list are that profile's.
+    runtimeProfiles: hermesProfiles(),
     // `hermes-acp` is the stdio server Timon starts: run by hand it opens nothing and waits, which a
     // tester took for a sign-in stuck on a browser (TIM-0153). The sentence names the command that does sign in.
     signIn: {

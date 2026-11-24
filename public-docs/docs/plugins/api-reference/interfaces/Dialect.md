@@ -99,6 +99,12 @@
 
 ***
 
+### runtimeProfiles?
+
+> `optional` **runtimeProfiles?**: `RuntimeProfilesStrategy`
+
+***
+
 ### sessionResumable
 
 > `readonly` **sessionResumable**: `boolean`

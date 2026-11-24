@@ -120,7 +120,7 @@ const KIT_TYPE_NAMES: Record<'provider' | 'testing', readonly string[]> = {
     // `ProviderServices` and `ProviderRuntime` are frozen member by member under `members` (`provider.*`), not as
     // one type: the runtime's type prints as the whole of its signatures, which no snapshot can usefully hold.
     'ProviderMcpPlan', 'ProviderMcpServer', 'ProviderMcpOptions', 'ProviderEnvPlan', 'NativeProviderDefinition', 'ProviderDeclarations',
-    'ProviderBinaryDeclaration', 'LaunchStrategy', 'ModelsStrategy', 'ReasoningStrategy', 'ProviderScratchDir', 'ProviderScratch',
+    'ProviderBinaryDeclaration', 'LaunchStrategy', 'ModelsStrategy', 'RuntimeProfilesStrategy', 'ReasoningStrategy', 'ProviderScratchDir', 'ProviderScratch',
     'ProviderRedact', 'ProviderBinary', 'ProviderMedia', 'ProviderOsCredentials', 'ProviderProbeOptions',
     'ProviderProbeResult', 'ProviderServeOptions', 'ProviderServer', 'ProviderGeneratedMedia',
     'ProviderAccount', 'ProviderAccountContext', 'ProviderAccountsDeclaration', 'ProviderLoginDriver', 'AcpAgentSpec', 'AcpSignIn',

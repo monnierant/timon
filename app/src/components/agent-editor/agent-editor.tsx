@@ -25,6 +25,7 @@ import { reportDirectoryPick, useDirectoryPicker } from '@/components/directory-
 import { startAgentEditorDiagnostic } from '@/lib/agent-editor-diagnostic';
 import { BrowserProfileSelect } from '@/components/browser-profile-select';
 import { ModelPickerPanel, type ModelPick } from '@/components/model-picker';
+import { RuntimeProfileSelect, useRuntimeProfiles } from './runtime-profile-field';
 import { SelfPermissionsBadge } from '@/components/self-permissions-badge';
 import { agentPermissionMode, PermissionModeField } from './permission-mode-field';
 import { AgentApprovals } from '@/components/agent-editor/agent-approvals';
@@ -86,6 +87,8 @@ type AgentSummary = {
   missions?: number;
   project?: string | null;
   browser_profile_id?: string | null;
+  /** Named home of the backend's program the agent runs on (a Hermes profile); absent = the default. */
+  runtime_profile?: string;
   emoji?: string | null;
   color?: string | null;
   icon_url?: string | null;
@@ -175,6 +178,8 @@ type Draft = {
   model: string;
   /** Default thinking level; '' = the model's own default. */
   reasoningEffort: string;
+  /** Runtime profile (a Hermes profile) of the backend's program; '' = its default. */
+  runtimeProfile: string;
   mode: string;
   allowed: string[];
   denied: string[];
@@ -295,6 +300,7 @@ function toDraft(a: AgentSummary, cat: BackendCatalog): Draft {
     backend,
     model: a.model || defaultModelFor(cat, backend),
     reasoningEffort: a.reasoning_effort ?? '',
+    runtimeProfile: a.runtime_profile ?? '',
     mode: agentPermissionMode(a.permission_mode),
     allowed: [...(a.allowed_tools || [])],
     denied: [...(a.denied_tools || [])],
@@ -395,6 +401,20 @@ export function AgentEditor({ agent, isNew, onClose, onDirtyChange, initialTab }
      two profiles can share the same CLI (hence the same capabilities)
      under two names. */
   const draftBackend = asBackend(draft?.backend);
+  // The runtime profiles (Hermes profiles) this backend offers; null hides the field.
+  const runtimeProfiles = useRuntimeProfiles(draftBackend);
+  // The list of the profile in the draft. An agent saved without a model runs the one that
+  // profile names as its own: the editor shows that one, not the default profile's, until
+  // the user picks a model.
+  const profileCatalog = useBackendCatalog(runtimeProfiles
+    ? { project: draft?.project, agent: wantsNew ? null : draft?.name, runtimeProfile: { backend: draftBackend, name: draft?.runtimeProfile ?? '' } }
+    : null);
+  const profileDefault = runtimeProfiles ? profileCatalog.backends.find((b) => b.id === draftBackend)?.defaultModel : undefined;
+  const modelPicked = useRef(false);
+  useEffect(() => {
+    if (!profileDefault || selected?.model || modelPicked.current) return;
+    setDraft((d) => (d && d.model !== profileDefault ? { ...d, model: profileDefault } : d));
+  }, [profileDefault, selected?.model]);
   const subscription = catalog.backends.find((b) => b.id === draftBackend)?.subscription;
   const modelPick = agentModelPick(catalog, draftBackend, draft?.model);
   const ownPermissions = managesOwnPermissions(catalog, draftBackend);
@@ -654,6 +674,7 @@ export function AgentEditor({ agent, isNew, onClose, onDirtyChange, initialTab }
     if (unsaved && !(await confirmAction({ title: t('confirmDialog.discardChanges'), confirmLabel: t('confirmDialog.discard'), destructive: true }))) return;
     const full = await fetchAgentDetails(a);
     setSelected(full);
+    modelPicked.current = false;
     setDraft(toDraft(full, catalog));
     if (full.name) void loadSkillState(full.name);
     setDirty(false);
@@ -872,6 +893,12 @@ export function AgentEditor({ agent, isNew, onClose, onDirtyChange, initialTab }
           // reviewer because the field says so, whatever it is called.
           role: draft.role || 'coder',
           reasoningEffort: draft.reasoningEffort || undefined,
+          // Null says "the default" out loud (a save that leaves it out keeps the saved one):
+          // sent for a backend that offers profiles, and when the agent leaves its backend.
+          // Profiles not read (yet), on the same backend: left out, never cleared by accident.
+          runtime_profile: runtimeProfiles
+            ? draft.runtimeProfile || null
+            : draft.backend !== asBackend(selected?.backend) ? null : undefined,
           global_context: draft.globalContext || undefined,
         },
       };
@@ -1166,6 +1193,16 @@ export function AgentEditor({ agent, isNew, onClose, onDirtyChange, initialTab }
                 personality — hence its own tab, with the billing copy its
                 backend declares. */}
             <TabPanel active={tab === 'llm'}>
+              {/* The profile first: the models below are the ones it offers. */}
+              {runtimeProfiles && (
+                <FormRow label={runtimeProfiles.label} hint={t('editPage.runtimeProfileHint')}>
+                  <RuntimeProfileSelect
+                    offered={runtimeProfiles}
+                    value={draft.runtimeProfile}
+                    onChange={(name) => updateDraft('runtimeProfile', name)}
+                  />
+                </FormRow>
+              )}
               <FormRow label={t('editPage.llmLabel')} hint={t('editPage.llmHint')}>
                 {/* No `inherit` entry: an agent always runs on one pair. A
                     pinned account that is gone stays shown, selected and
@@ -1175,9 +1212,15 @@ export function AgentEditor({ agent, isNew, onClose, onDirtyChange, initialTab }
                   className="h-[420px]"
                   value={modelPick}
                   // A new agent has no name a grant could hold yet.
-                  target={{ project: draft.project, agent: wantsNew ? null : draft.name }}
+                  target={{
+                    project: draft.project,
+                    agent: wantsNew ? null : draft.name,
+                    // The profile picked here, saved or not: the list follows it at once.
+                    runtimeProfile: runtimeProfiles ? { backend: draftBackend, name: draft.runtimeProfile } : null,
+                  }}
                   onChange={(picked) => {
                     if (!picked) return;
+                    modelPicked.current = true;
                     const values = thinkingValues(thinkingBarFor(catalog, picked.backend, picked.model));
                     setDraft((d) => (d ? { ...d, backend: picked.backend, model: picked.model, reasoningEffort: keepEffort(d.reasoningEffort, values) } : d));
                     setDirty(true);

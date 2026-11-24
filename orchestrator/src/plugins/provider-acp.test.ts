@@ -163,6 +163,47 @@ test('oneShotEnv: rendered on a daemon one-shot only, over the profile\'s and th
   assert.deepEqual(oneShot.env, { ACME_PROFILE: '1', ACME_MODE: 'row', ACME_LOCK: 'shut' });
 });
 
+/* ── Runtime profiles: one program, several homes, the agent picks one ─────────────────────── */
+
+const homes = {
+  label: 'Acme profile',
+  list: async () => ['alpha', 'beta'],
+  env: (name: string, profile: { env: Record<string, string> }) => ({ ACME_HOME: `${profile.env['ACME_ROOT'] ?? '/acme'}/profiles/${name}` }),
+};
+
+test('runtimeProfiles: the agent\'s profile adds its environment to the launch; none leaves the launch as it was', async () => {
+  const homed = ctx.provider.runtime.acp.defineProvider(ctx.provider, {
+    id: 'acme-homed', args: [], binary: { names: ['acme-acp'], install: { any: { kind: 'none' } } },
+    env: () => ({ ACME_MODE: 'row' }), runtimeProfiles: homes,
+  });
+  assert.deepEqual(ctx.provider.runtime.check.definitionProblems(homed), []);
+  assert.equal(homed.runtimeProfiles?.label, 'Acme profile', 'the strategy reaches the definition');
+  const profile = { id: 'acme-homed', cmd: 'acme-acp', env: { ACME_ROOT: '/srv/acme', ACME_HOME: '/srv/acme' } } as never;
+  const spawn = { agentName: 'acme', systemPrompt: '', message: 'hi', resumeSession: null, missionId: 'm-homed' };
+  const plain = await homed.launch({ ...spawn, cfg: { cwd: tmpdir() } }, profile);
+  assert.deepEqual(plain.env, { ACME_ROOT: '/srv/acme', ACME_HOME: '/srv/acme', ACME_MODE: 'row' });
+  const onAlpha = await homed.launch({ ...spawn, cfg: { cwd: tmpdir(), runtime_profile: 'alpha' } }, profile);
+  assert.deepEqual(onAlpha.env, { ACME_ROOT: '/srv/acme', ACME_HOME: '/srv/acme/profiles/alpha', ACME_MODE: 'row' });
+});
+
+test('runtimeProfiles: a probe for a runtime profile runs in that profile\'s environment and asks for the whole list', async () => {
+  const opened: Array<Readonly<Record<string, string>> | undefined> = [];
+  const services = {
+    mcp: ctx.provider.mcp,
+    binary: { converse: async (_name: string, _args: readonly string[], options?: { env?: Readonly<Record<string, string>> }) => { opened.push(options?.env); throw new Error('stop here'); } },
+  };
+  const probing = ctx.provider.runtime.acp.defineProvider(services as never, {
+    id: 'acme-homed-probe', args: [], binary: { names: ['acme-acp'], install: { any: { kind: 'none' } } },
+    modelProbe: 'session-new', runtimeProfiles: homes,
+  });
+  ctx.provider.runtime.acp.forgetModels();
+  const base = { id: 'acme-homed-probe', cmd: 'acme-acp', env: { ACME_ROOT: '/srv/acme' } };
+  await assert.rejects(probing.models!.discover(base as never));
+  await assert.rejects(probing.models!.discover({ ...base, runtimeProfile: 'beta' } as never));
+  assert.deepEqual(opened, [{ ACME_ROOT: '/srv/acme' }, { ACME_ROOT: '/srv/acme', ACME_HOME: '/srv/acme/profiles/beta' }]);
+  ctx.provider.runtime.acp.forgetModels();
+});
+
 test('dispose: killing a mission lets go of the pipes of its session', async () => {
   const child = nodeSpawn(process.execPath, [FAKE], { stdio: ['pipe', 'pipe', 'pipe'] });
   child.stderr.resume();

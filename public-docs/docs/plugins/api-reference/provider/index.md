@@ -157,6 +157,7 @@ before you ship).
 - [RemoteSessionResume](type-aliases/RemoteSessionResume.md)
 - [RpcId](type-aliases/RpcId.md)
 - [RpcMessage](type-aliases/RpcMessage.md)
+- [RuntimeProfilesStrategy](type-aliases/RuntimeProfilesStrategy.md)
 - [ScratchLinkMethod](type-aliases/ScratchLinkMethod.md)
 - [ScratchWriteOptions](type-aliases/ScratchWriteOptions.md)
 - [SecretRef](type-aliases/SecretRef.md)

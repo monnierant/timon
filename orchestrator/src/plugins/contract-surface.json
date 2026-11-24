@@ -2143,6 +2143,7 @@
         "permissionsHint?": "string | undefined",
         "capabilities?": "Partial<BackendCapabilities> | undefined",
         "accountUsage?": "((profile: ProfileRuntime, options?: UsageProbeOptions) => Promise<AccountUsage | null>) | undefined",
+        "runtimeProfiles?": "RuntimeProfilesStrategy | undefined",
         "discoverModels?": "((profile: ProfileRuntime) => Promise<Array<string | DiscoveredModel>>) | undefined",
         "permissionsByAgent?": "((profileId: string) => boolean) | undefined",
         "appliesPermissionMode?": "boolean | undefined",
@@ -2220,7 +2221,8 @@
         "cmd": "string",
         "env": "Record<string, string>",
         "providerConfig?": "ProviderConfig | undefined",
-        "knownModels?": "readonly string[] | undefined"
+        "knownModels?": "readonly string[] | undefined",
+        "runtimeProfile?": "string | undefined"
       }
     },
     "ProviderConfig": {
@@ -2273,6 +2275,8 @@
         "tier?": "\"flagship\" | \"mid\" | \"small\" | undefined",
         "addedAt?": "number | undefined",
         "hidden?": "boolean | undefined",
+        "searchOnly?": "boolean | undefined",
+        "current?": "boolean | undefined",
         "label": "string",
         "contextWindow?": "number | undefined",
         "contextWindowDeclared?": "boolean | undefined",
@@ -2320,7 +2324,9 @@
       "signature": "DiscoveredModel",
       "members": {
         "slug": "string",
-        "supportedReasoningLevels?": "string[] | undefined"
+        "supportedReasoningLevels?": "string[] | undefined",
+        "searchOnly?": "boolean | undefined",
+        "current?": "boolean | undefined"
       }
     },
     "ModelReasoning": {
@@ -2366,6 +2372,7 @@
         "browserToolsHint?": "string | undefined",
         "permissionsHint?": "string | undefined",
         "accountUsage?": "((profile: ProfileRuntime, options?: UsageProbeOptions) => Promise<AccountUsage | null>) | undefined",
+        "runtimeProfiles?": "RuntimeProfilesStrategy | undefined",
         "discoverModels?": "((profile: ProfileRuntime) => Promise<Array<string | DiscoveredModel>>) | undefined",
         "permissionsByAgent?": "((profileId: string) => boolean) | undefined",
         "appliesPermissionMode?": "boolean | undefined",
@@ -3116,7 +3123,8 @@
         "mcp_servers?": "string[] | undefined",
         "excluded_mcp_servers?": "string[] | undefined",
         "project?": "string | undefined",
-        "browser_profile_id?": "string | null | undefined"
+        "browser_profile_id?": "string | null | undefined",
+        "runtime_profile?": "string | undefined"
       }
     },
     "ProviderDefinition": {
@@ -3779,6 +3787,7 @@
         "declares?": "Omit<ProviderDeclarations, \"spans\" | \"binary\"> | undefined",
         "models?": "ModelsStrategy | undefined",
         "modelProbe?": "\"session-new\" | undefined",
+        "runtimeProfiles?": "RuntimeProfilesStrategy | undefined",
         "env?": "((spawn: BuildSpawnOpts) => Record<string, string>) | undefined",
         "oneShotEnv?": "Readonly<Record<string, string>> | undefined",
         "sessionModes?": "Readonly<Partial<Record<\"plan\" | \"default\" | \"acceptEdits\" | \"auto\" | \"dontAsk\" | \"bypassPermissions\", string>>> | undefined",
@@ -3986,6 +3995,15 @@
       "members": {
         "level?": "{ readonly flag: string; readonly off: string; readonly readOnly?: readonly string[]; } | undefined",
         "offArgs?": "readonly string[] | undefined"
+      }
+    },
+    "RuntimeProfilesStrategy": {
+      "since": 18,
+      "signature": "RuntimeProfilesStrategy",
+      "members": {
+        "label": "string",
+        "list": "(profile: ProfileRuntime) => Promise<string[]>",
+        "env": "(name: string, profile: ProfileRuntime) => Record<string, string>"
       }
     }
   },
